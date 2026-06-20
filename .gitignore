@@ -18,4 +18,4 @@ tests/_tmp_*
 __pycache__/
 *.pyc
 *.egg-info/
-.DS_Store
+.DS_Store*.pem
