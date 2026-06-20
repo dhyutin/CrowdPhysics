@@ -10,6 +10,9 @@ raft_log.txt
 *.pt
 *.pth
 
+# secrets
+*.pem
+
 # Test outputs
 tests/*.png
 tests/_tmp_*
@@ -19,3 +22,4 @@ __pycache__/
 *.pyc
 *.egg-info/
 .DS_Store*.pem
+
