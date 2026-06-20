@@ -83,7 +83,7 @@ def interpret_live(physics_state, venue=""):
         )
 
     resp = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=300,
         system=SYSTEM_CORE,
         messages=[{
@@ -129,7 +129,7 @@ def name_discovered_physics(probe_results):
              if k not in ("unknown", "latent_dim")}
 
     resp = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=500,
         system=(
             "You are a crowd dynamics physicist examining what a neural network "
@@ -189,7 +189,7 @@ def explain_rl_decision(intervention, physics_state, venue_config=None):
             venue_action = f"\nVenue action: {mapped}"
 
     resp = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=350,
         system=SYSTEM_CORE,
         messages=[{
@@ -231,7 +231,7 @@ def generate_safety_report(venue_config, sim_results):
         str — executive safety report
     """
     resp = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=600,
         system=SYSTEM_CORE,
         messages=[{
@@ -284,7 +284,7 @@ def run_venue_agent(venue_description, save_path="venue_config.json"):
         dict — venue config ready for use in interpret_live()
     """
     resp = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=800,
         system=(
             "You are a crowd safety consultant configuring a real-time "
@@ -327,10 +327,15 @@ Output only the JSON."""
 
     raw = resp.content[0].text.strip()
     # Strip markdown fences if Claude added them despite instructions
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
+    if "```" in raw:
+        parts = raw.split("```")
+        for part in parts:
+            candidate = part.strip()
+            if candidate.startswith("json"):
+                candidate = candidate[4:].strip()
+            if candidate.startswith("{"):
+                raw = candidate
+                break
     raw = raw.strip()
 
     try:
@@ -416,7 +421,7 @@ def run_calibration_agent(feature_sequence, frame_sample=None):
     }
 
     resp = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=300,
         system=(
             "You are a crowd physics calibration system. "

@@ -13,13 +13,13 @@ import numpy as np
 # ─── ACTION SPACE ─────────────────────────────────────────────────────────────
 
 ACTIONS = {
-    0: ("Monitor",         "Continue monitoring. No action needed."),
-    1: ("Gate A Open",     "Open exit gate A. Increases east-side capacity."),
-    2: ("Gate B Open",     "Open exit gate B. Increases west-side capacity."),
-    3: ("Stop Entry",      "Halt all incoming crowd flow immediately."),
-    4: ("Redirect Flow",   "Guide crowd away from high-pressure zone."),
-    5: ("Dispersal Alert", "Sound audio cue. Signal crowd to spread out."),
-    6: ("Emergency",       "Full evacuation. Contact emergency services.")
+    0: ("monitor",          "Observe. No intervention needed."),
+    1: ("increase_egress",  "Open exits — reduce crowd compression."),
+    2: ("reduce_ingress",   "Slow or halt incoming crowd flow."),
+    3: ("lateral_redirect", "Guide crowd sideways — relieve pressure zone."),
+    4: ("disperse",         "Signal crowd to spread out."),
+    5: ("partial_evac",     "Clear high-pressure zone via nearest safe exit."),
+    6: ("full_evac",        "Full evacuation. Contact emergency services.")
 }
 N_ACTIONS = len(ACTIONS)
 
