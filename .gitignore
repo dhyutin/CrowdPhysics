@@ -1,3 +1,21 @@
 plan/
 data/
 .env
+secrets/
+
+# Training outputs
+models/
+training_log.txt
+raft_log.txt
+*.pt
+*.pth
+
+# Test outputs
+tests/*.png
+tests/_tmp_*
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.DS_Store

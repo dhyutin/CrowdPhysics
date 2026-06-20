@@ -2,10 +2,120 @@
 """
 Phase 1: Optical Flow Core
 Everything downstream depends on this being correct.
+
+Flow backends:
+  - RAFT  (default when GPU available): fine-tuned neural optical flow,
+    significantly better on crowded/occluded scenes.
+  - Farneback (CPU fallback): fast hand-crafted flow, used when no GPU
+    or RAFT weights are not yet available.
+
+Set FLOW_BACKEND = 'raft' | 'farneback' to override.
 """
 
 import cv2
 import numpy as np
+import torch
+import torch.nn.functional as F
+
+# ─── DEVICE ───────────────────────────────────────────────────────────────────
+
+def _get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+DEVICE = _get_device()
+
+# ─── RAFT WRAPPER ─────────────────────────────────────────────────────────────
+
+_raft_model = None  # lazy-loaded singleton
+
+def _load_raft(weights_path=None):
+    """
+    Load RAFT-Small from torchvision (pretrained) or from fine-tuned weights.
+    Lazy-loaded once, then cached.
+    """
+    global _raft_model
+    if _raft_model is not None:
+        return _raft_model
+
+    try:
+        from torchvision.models.optical_flow import raft_small, Raft_Small_Weights
+        if weights_path and __import__("os").path.exists(weights_path):
+            model = raft_small(weights=None)
+            model.load_state_dict(torch.load(weights_path, map_location=DEVICE))
+            print(f"[RAFT] Loaded fine-tuned weights from {weights_path}")
+        else:
+            model = raft_small(weights=Raft_Small_Weights.DEFAULT)
+            print("[RAFT] Loaded torchvision pretrained weights")
+        model = model.to(DEVICE).eval()
+        _raft_model = model
+    except Exception as e:
+        print(f"[RAFT] Failed to load: {e}. Falling back to Farneback.")
+        _raft_model = None
+
+    return _raft_model
+
+
+def _frame_to_tensor(frame):
+    """Convert BGR uint8 HxWxC → float32 1xCxHxW in [0,1], RGB."""
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    t = torch.from_numpy(rgb).permute(2, 0, 1).float() / 255.0
+    return t.unsqueeze(0).to(DEVICE)
+
+
+def extract_raft_flow(frame1, frame2,
+                      weights_path="models/raft_crowd.pt"):
+    """
+    Compute dense optical flow using RAFT (neural network).
+
+    Returns flow: np.ndarray shape (H, W, 2)  — same contract as Farneback.
+    Falls back to Farneback silently if RAFT isn't available.
+    """
+    model = _load_raft(weights_path)
+    if model is None:
+        return extract_farneback_flow(frame1, frame2)
+
+    # RAFT requires H,W divisible by 8
+    H, W = frame1.shape[:2]
+    pad_h = (8 - H % 8) % 8
+    pad_w = (8 - W % 8) % 8
+
+    t1 = _frame_to_tensor(frame1)
+    t2 = _frame_to_tensor(frame2)
+
+    if pad_h or pad_w:
+        t1 = F.pad(t1, (0, pad_w, 0, pad_h))
+        t2 = F.pad(t2, (0, pad_w, 0, pad_h))
+
+    with torch.no_grad():
+        # Returns list of flow predictions; last is finest resolution
+        flow_preds = model(t1, t2)
+        flow_tensor = flow_preds[-1]          # (1, 2, H_pad, W_pad)
+
+    # Crop back to original size and convert to (H, W, 2) numpy
+    flow_np = flow_tensor[0, :, :H, :W].permute(1, 2, 0).cpu().numpy()
+    return flow_np.astype(np.float32)
+
+
+# ─── BACKEND SELECTOR ─────────────────────────────────────────────────────────
+
+FLOW_BACKEND = "raft" if (DEVICE.type in ("cuda", "mps")) else "farneback"
+
+
+def extract_flow(frame1, frame2,
+                 backend=None,
+                 raft_weights="models/raft_crowd.pt"):
+    """
+    Unified flow extraction. Picks RAFT on GPU/MPS, Farneback on CPU.
+    Override with backend='raft' or backend='farneback'.
+    """
+    b = backend or FLOW_BACKEND
+    if b == "raft":
+        return extract_raft_flow(frame1, frame2, raft_weights)
+    return extract_farneback_flow(frame1, frame2)
 
 
 # ─── CORE FLOW EXTRACTION ────────────────────────────────────────────────────
@@ -272,7 +382,7 @@ def process_video_to_features(video_path, max_frames=None):
         if max_frames and frames_read >= max_frames:
             break
 
-        flow = extract_farneback_flow(prev, curr)
+        flow = extract_flow(prev, curr)
         feat = flow_to_features(flow)
         features.append(feat)
 
