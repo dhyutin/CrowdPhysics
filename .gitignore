@@ -1,29 +1,45 @@
-plan/
-data/
+# ── Secrets / env ─────────────────────────────────────────────
 .env
+.env.*
 secrets/
+*.pem
 
-# Training outputs
+# ── Large data & planning notes (not tracked) ────────────────
+data/
+plan/
+archive/
+
+# ── Trained models / checkpoints ─────────────────────────────
 models/
-training_log.txt
-raft_log.txt
+models_v2/
 *.pt
 *.pth
 
-# secrets
-*.pem
+# ── Training & run outputs ───────────────────────────────────
+logs/
+*.log
+training_log.txt
+raft_log.txt
+*.pkl
 
-# Test outputs
+# ── Test / scratch outputs ───────────────────────────────────
 tests/*.png
 tests/_tmp_*
 
-# Local archive of dead/old files (not tracked)
-archive/
-
-# Python
+# ── Python ───────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
 *.egg-info/
-.DS_Store*.pem
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
 
-devpost/
+# ── OS / editor cruft ────────────────────────────────────────
+.DS_Store
+*.swp
+
+# ── devpost drafts & exports (diagrams are referenced by README —
+#    keep them tracked; ignore only the heavy generated deck) ──
+devpost/*.pptx
