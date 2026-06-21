@@ -5,6 +5,7 @@ export const metadata: Metadata = {
   title: "CrowdPhysics — AI Crowd Safety Platform",
   description:
     "Plan safe. Monitor live. Never react. Crowd fluid dynamics + AI safety platform.",
+  icons: { icon: "/crowd_physics_logo.png" },
 };
 
 export default function RootLayout({

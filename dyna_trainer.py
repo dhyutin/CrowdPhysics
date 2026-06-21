@@ -241,14 +241,24 @@ class DynaTrainer:
     # ── MAIN TRAINING LOOP ────────────────────────────────────────────────────
 
     def run_dyna_training(self, n_episodes=500, steps_per_episode=10,
-                          logger=None):
+                          logger=None, checkpoint_path=None,
+                          checkpoint_every=100):
         """
         Full Dyna training loop.
         Generate episodes in world model → train policy → repeat.
 
         Args:
             logger: optional MetricsLogger — logs per-episode reward/loss curves.
+            checkpoint_path: if set, save the Q-net here every
+                `checkpoint_every` episodes (overwriting), plus a
+                "<stem>_best.pt" whenever avg_reward_50 hits a new high.
+                Lets you stop the run anytime and keep a usable policy.
+            checkpoint_every: episodes between checkpoint saves.
         """
+        best_ckpt_path = None
+        best_avg = float("-inf")
+        if checkpoint_path:
+            best_ckpt_path = checkpoint_path.replace(".pt", "_best.pt")
         # Adaptive ε decay: anneal from 1.0 → eps_min over ~80% of training,
         # so the policy still has runway to exploit at the chosen ε floor.
         # (The old fixed 0.995 left ε at ~0.22 after 300 episodes — barely
@@ -297,6 +307,18 @@ class DynaTrainer:
                       f"ε: {self.epsilon:.3f} | "
                       f"Buffer: {len(self.replay_buffer)}")
 
+            # ── periodic checkpointing ──────────────────────────────────────
+            if checkpoint_path and (ep + 1) % checkpoint_every == 0:
+                torch.save(self.q_net.state_dict(), checkpoint_path)
+                if avg_r > best_avg:
+                    best_avg = avg_r
+                    torch.save(self.q_net.state_dict(), best_ckpt_path)
+                print(f"  [ckpt] ep {ep+1}: saved {checkpoint_path} "
+                      f"(best avg_reward_50={best_avg:.2f})", flush=True)
+
+        # Always save the final policy too.
+        if checkpoint_path:
+            torch.save(self.q_net.state_dict(), checkpoint_path)
         print(f"\n✓ Dyna training complete")
         return self.q_net
 

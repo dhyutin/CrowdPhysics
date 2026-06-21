@@ -46,19 +46,16 @@ function Landing({ onEnter }: { onEnter: (m: Mode) => void }) {
         }}
       />
       <div className="relative flex-1 flex flex-col items-center justify-center px-6 py-16 max-w-5xl mx-auto w-full">
-        {/* brand */}
-        <div className="flex items-center gap-2.5 mb-8">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center"
-            style={{ background: "linear-gradient(135deg, #4493F8 0%, #1F6FEB 100%)", boxShadow: "0 0 20px rgba(68,147,248,0.35)" }}>
-            <span className="font-mono text-xs font-bold text-white">CP</span>
-          </div>
-          <div>
-            <p className="display text-base font-bold text-text1 leading-tight tracking-tight">CrowdPhysics</p>
-            <p className="font-mono text-[9px] text-text3 tracking-wider">AI CROWD SAFETY PLATFORM</p>
-          </div>
-        </div>
+        {/* brand logo */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/crowd_physics_logo.png"
+          alt="CrowdPhysics — Plan safe. Monitor live. Never react."
+          className="w-full max-w-md mb-8 select-none rounded-xl"
+          style={{ mixBlendMode: "lighten" }}
+        />
 
-        <h1 className="display text-3xl sm:text-4xl font-bold text-center text-text1 leading-tight max-w-3xl">
+        <h1 className="display text-2xl sm:text-3xl font-bold text-center text-text1 leading-tight max-w-3xl">
           See the crowd&apos;s future <span style={{ color: "#4493F8" }}>before</span> it becomes a crisis.
         </h1>
         <p className="text-text3 text-center mt-4 max-w-xl text-sm leading-relaxed">
@@ -117,8 +114,6 @@ export default function Home() {
     return <Landing onEnter={(m) => { setMode(m); setEntered(true); }} />;
   }
 
-  const meta = MODES[mode];
-
   return (
     <div className="flex flex-col h-screen bg-void overflow-hidden">
       {/* ── Top bar ──────────────────────────────────── */}
@@ -126,15 +121,14 @@ export default function Home() {
         style={{ background: "linear-gradient(90deg, #10151D 0%, #0D1117 100%)" }}>
 
         {/* brand → home */}
-        <button onClick={() => setEntered(false)} className="flex items-center gap-2.5 group">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: "linear-gradient(135deg, #4493F8 0%, #1F6FEB 100%)", boxShadow: "0 0 12px rgba(68,147,248,0.3)" }}>
-            <span className="font-mono text-[10px] font-bold text-white">CP</span>
-          </div>
-          <div className="text-left">
-            <p className="display text-sm font-bold text-text1 leading-tight tracking-tight group-hover:text-teal transition-colors">CrowdPhysics</p>
-            <p className="font-mono text-[9px] text-text3 leading-none tracking-wider mt-0.5">{meta.tagline}</p>
-          </div>
+        <button onClick={() => setEntered(false)} className="flex items-center group" title="Back to home">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/crowd_physics_logo.png"
+            alt="CrowdPhysics"
+            className="h-11 w-auto object-contain group-hover:opacity-80 transition-opacity select-none"
+            style={{ mixBlendMode: "lighten" }}
+          />
         </button>
 
         {/* mode switch */}
