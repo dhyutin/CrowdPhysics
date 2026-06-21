@@ -40,6 +40,8 @@ WM_LAYERS = int(os.environ.get("WM_N_LAYERS", "3"))
 MAX_FRAMES = int(os.environ.get("PROBE_MAX_FRAMES", "300"))
 CACHE_PATH = os.environ.get("FEATURE_CACHE", "data/features_cache_v2.pkl")
 VIDEO_DIR = os.environ.get("VIDEO_DIR", "data/videos")
+BASE_PATH = os.environ.get("BASE_PATH", "models/world_model.pt")
+VLA_PATH = os.environ.get("VLA_PATH", "models_v2/world_model_vla.pt")
 
 CONCEPTS = ("crowd_velocity", "turbulence", "backward_pressure",
             "boundary_stress")
@@ -130,10 +132,11 @@ def main():
     # Leaving them at identity (0/1) makes standardize() a no-op, which matches
     # how a pre-standardization model was trained (raw features).
     missing, _ = base.load_state_dict(
-        torch.load("models/world_model.pt", map_location="cpu"), strict=False)
+        torch.load(BASE_PATH, map_location="cpu"), strict=False)
     if any("feat_" in m for m in missing):
         print("[compare] baseline has no standardization buffers "
               "(pre-standardization checkpoint) -> using raw features")
+    print(f"[compare] baseline = {BASE_PATH}")
     base.eval()
 
     def enc_v1(wm, feats):
@@ -147,8 +150,8 @@ def main():
     # ── VLA (v2) ────────────────────────────────────────────────────────────────
     vla = CrowdWorldModelV2(hidden_dim=WM_HIDDEN, n_layers=WM_LAYERS,
                             transition_type="lstm")
-    vla.load_state_dict(
-        torch.load("models_v2/world_model_vla.pt", map_location="cpu"))
+    vla.load_state_dict(torch.load(VLA_PATH, map_location="cpu"))
+    print(f"[compare] vla = {VLA_PATH}")
     vla.eval()
 
     def enc_v2(wm, feats):
