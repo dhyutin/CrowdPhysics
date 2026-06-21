@@ -63,7 +63,8 @@ export async function monitorUrl(
 // EventSource can't POST a file or JSON body, so we stream the response body
 // of a normal POST and parse one JSON event per line. Each event is a LiveTick.
 
-export type LiveEventType = "source" | "calibrating" | "tick" | "done";
+export type LiveEventType =
+  | "source" | "calibrating" | "tick" | "done" | "alert";
 
 export interface LiveTick {
   type: LiveEventType;
@@ -96,6 +97,13 @@ export interface LiveTick {
   peak_frame_b64?: string | null;
   flow_gif_b64?: string | null;
   agent_trace?: AgentTraceStep[];
+  counterfactual?: Counterfactual | null;
+  // alert event (type === "alert")
+  sent?: boolean;
+  channels?: string[];
+  message?: string;
+  sent_at?: string;
+  reason?: string;
 }
 
 async function consumeStream(
@@ -312,6 +320,35 @@ export interface AgentTraceStep {
   status: "ok" | "danger";
 }
 
+// World-model counterfactual: projected risk doing nothing vs taking the
+// recommended intervention, proving the fix lowers risk.
+export interface CounterfactualPoint {
+  t: number;
+  risk: number;
+}
+
+export interface Counterfactual {
+  action_idx: number;
+  action_name: string;
+  action_description: string;
+  do_nothing_risk: number;
+  action_risk: number;
+  reduction_pct: number;
+  points_do_nothing: CounterfactualPoint[];
+  points_action: CounterfactualPoint[];
+  horizon_s: number;
+  error?: string;
+}
+
+// Status of a dispatched (or skipped) external danger alert.
+export interface AlertStatus {
+  sent: boolean;
+  channels: string[];
+  message?: string;
+  sent_at?: string;
+  reason?: string;
+}
+
 export interface AnalyzeResult {
   peak_frame_b64: string | null;
   flow_gif_b64?: string | null;
@@ -323,6 +360,8 @@ export interface AnalyzeResult {
   forecast?: Forecast | null;
   trend?: Trend | null;
   hotspot?: Hotspot | null;
+  counterfactual?: Counterfactual | null;
+  alert?: AlertStatus | null;
   agent_trace?: AgentTraceStep[];
 }
 

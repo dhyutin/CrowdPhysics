@@ -14,11 +14,18 @@ import {
   type CaptureSource,
   type LiveTick,
   type AgentTraceStep,
+  type Counterfactual,
+  type AlertStatus,
 } from "@/lib/api";
 import AgentTrace from "@/components/AgentTrace";
 import ForecastPanel from "@/components/ForecastPanel";
 import TrendPanel from "@/components/TrendPanel";
 import FilmPlayer, { type FilmFrame } from "@/components/FilmPlayer";
+import InterventionImpact from "@/components/InterventionImpact";
+
+// After this many consecutive failed session re-provisions, stop monitoring
+// and surface a clear message instead of reconnecting endlessly.
+const MAX_RECONNECTS = 5;
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
   SAFE:        { badge: "badge-safe",    dot: "dot-live",    label: "Safe" },
@@ -159,6 +166,16 @@ export default function MonitorTab() {
   const [liveTotal, setLiveTotal]   = useState(0);
   const [livePhase, setLivePhase]   = useState("");
   const [liveSource, setLiveSource] = useState<CaptureSource | null>(null);
+  // Danger response: world-model counterfactual + dispatched external alert.
+  const [counterfactual, setCounterfactual] = useState<Counterfactual | null>(null);
+  const [alert, setAlert] = useState<AlertStatus | null>(null);
+  // Self-healing live loop bookkeeping.
+  const [reconnecting, setReconnecting] = useState(false);
+  const failCountRef = useRef(0);
+  // Consecutive full session re-provisions; bounded by MAX_RECONNECTS so a
+  // genuinely uncapturable feed stops cleanly instead of reconnecting forever.
+  const reconnectAttemptsRef = useRef(0);
+  const lastTickRef = useRef<number>(0);
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -197,6 +214,12 @@ export default function MonitorTab() {
     setLiveHotspot(null);
     setLiveFrame(null);
     setFilm([]);
+    setCounterfactual(null);
+    setAlert(null);
+    setReconnecting(false);
+    setError(null);
+    failCountRef.current = 0;
+    reconnectAttemptsRef.current = 0;
     setPreviewErr(null);
     setPreviewLoading(true);
     try {
@@ -218,6 +241,9 @@ export default function MonitorTab() {
     abortRef.current?.abort();
     setStreaming(false);
     setLoad(false);
+    setReconnecting(false);
+    failCountRef.current = 0;
+    reconnectAttemptsRef.current = 0;
     setLivePhase("Stopped");
   }
 
@@ -254,7 +280,10 @@ export default function MonitorTab() {
       setLiveHotspot(null);
       setLiveFrame(null);
       setFilm([]);
+      setCounterfactual(null);
+      setAlert(null);
     }
+    lastTickRef.current = Date.now();
     setLiveStatus("CALIBRATING");
     setLiveNow(0);
     setLiveScore(0);
@@ -265,6 +294,7 @@ export default function MonitorTab() {
 
     let capturedSource: CaptureSource | undefined;
     const onEvent = (ev: LiveTick) => {
+      lastTickRef.current = Date.now();  // heartbeat for the stall watchdog
       switch (ev.type) {
         case "source":
           capturedSource = {
@@ -321,6 +351,16 @@ export default function MonitorTab() {
           }
           break;
         }
+        case "alert":
+          // External danger alert dispatched (or skipped) by the backend.
+          setAlert({
+            sent: ev.sent ?? false,
+            channels: ev.channels ?? [],
+            message: ev.message,
+            sent_at: ev.sent_at,
+            reason: ev.reason,
+          });
+          break;
         case "done":
           setResult({
             peak_frame_b64: ev.peak_frame_b64 ?? null,
@@ -333,12 +373,20 @@ export default function MonitorTab() {
             forecast: ev.forecast ?? null,
             trend: ev.trend ?? null,
             hotspot: ev.hotspot ?? null,
+            counterfactual: ev.counterfactual ?? null,
             agent_trace: ev.agent_trace ?? [],
             source: capturedSource,
           });
           if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
           if (ev.trend) setLiveTrend(ev.trend);
           if (ev.hotspot) setLiveHotspot(ev.hotspot);
+          if (ev.counterfactual && !ev.counterfactual.error)
+            setCounterfactual(ev.counterfactual);
+          // A clean pass completed → reset the self-healing counters.
+          failCountRef.current = 0;
+          reconnectAttemptsRef.current = 0;
+          setReconnecting(false);
+          setError(null);
           setLivePhase("Complete");
           break;
       }
@@ -355,29 +403,94 @@ export default function MonitorTab() {
           liveSession ?? undefined, ac.signal, true);
       }
     } catch (e: unknown) {
-      if (!ac.signal.aborted) setError(String(e));
+      if (!ac.signal.aborted) {
+        setError(String(e));
+        // Live monitoring self-heals: count the failure so the loop effect
+        // can back off and (after repeats) re-provision the session.
+        if (mode === "live" && monitoring) failCountRef.current += 1;
+      }
     } finally {
       setStreaming(false);
       setLoad(false);
     }
   }
 
-  // Continuous live loop: while monitoring is on and we have a warm session,
-  // kick off an analysis pass whenever none is running. When a pass ends
-  // (streaming flips false) this re-fires and starts the next one, so live
-  // monitoring never stops until the user hits Stop. A short gap between
-  // passes keeps the session healthy and avoids a tight error spin.
+  // Continuous, self-healing live loop. While monitoring is on and we have a
+  // warm session, kick off an analysis pass whenever none is running. When a
+  // pass ends (streaming flips false) this re-fires and starts the next one,
+  // so live monitoring NEVER stops until the user hits Stop.
+  //
+  // On failure we never drop out of monitoring: we back off with capped
+  // exponential delay and — after repeats or a session-shaped error — silently
+  // re-provision a fresh Browserbase session, then resume. A short ~300ms gap
+  // between healthy passes keeps the feed feeling continuous.
   const handleRunRef = useRef(handleRun);
   handleRunRef.current = handleRun;
+  const reprovisionRef = useRef(false);
   useEffect(() => {
     if (mode !== "live" || !monitoring || streaming || !liveSession) return;
-    // Back off if the previous pass errored so we don't hammer the API.
-    const delay = error ? 5000 : 1200;
-    const id = setTimeout(() => {
-      if (!streaming) handleRunRef.current();
+
+    const failed = !!error;
+    const fails = failCountRef.current;
+    const sessionLikelyDead =
+      fails >= 2 ||
+      /session|closed|websocket|navigat|timeout|disconnect|stall/i.test(error ?? "");
+    // Capped exponential backoff on failure (1s,2s,4s,max 8s); tiny gap when healthy.
+    const delay = failed ? Math.min(8000, 1000 * 2 ** Math.min(fails, 3)) : 300;
+
+    let cancelled = false;
+    const id = setTimeout(async () => {
+      if (cancelled || streaming) return;
+
+      if (failed && sessionLikelyDead && !reprovisionRef.current) {
+        // Re-provision a fresh cloud browser, then let the liveSession change
+        // re-trigger this effect to run the next pass cleanly.
+        reprovisionRef.current = true;
+        setReconnecting(true);
+        setLivePhase("Reconnecting…");
+        try {
+          if (liveSession) endLiveSession(liveSession);
+          const s = await startLiveSession(liveUrl.trim());
+          if (cancelled) return;
+          setLiveView(s.live_view_url);
+          setLiveSession(s.session_id);
+          setError(null);
+          failCountRef.current = 0;
+        } catch (e: unknown) {
+          // Couldn't re-provision — keep monitoring and retry with longer backoff.
+          if (!cancelled) {
+            failCountRef.current += 1;
+            setError(String(e));
+          }
+        } finally {
+          reprovisionRef.current = false;
+          if (!cancelled) setReconnecting(false);
+        }
+        return;
+      }
+
+      setReconnecting(false);
+      handleRunRef.current();
     }, delay);
-    return () => clearTimeout(id);
-  }, [mode, monitoring, streaming, liveSession, error]);
+
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [mode, monitoring, streaming, liveSession, error, liveUrl]);
+
+  // Heartbeat watchdog: if a streaming pass goes quiet for too long the feed has
+  // likely stalled. Abort it and flag an error so the self-healing loop recovers
+  // instead of freezing on a dead stream.
+  useEffect(() => {
+    if (!streaming) return;
+    const STALL_MS = 15000;
+    const iv = setInterval(() => {
+      if (Date.now() - lastTickRef.current > STALL_MS) {
+        failCountRef.current += 1;
+        abortRef.current?.abort();
+        setError("stream stalled — watchdog triggered reconnect");
+      }
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [streaming]);
 
   const peakStatus = result?.timeline?.reduce((worst, p) => {
     const rank = { DANGER: 3, WARNING: 2, SAFE: 1, CALIBRATING: 0 };
@@ -579,7 +692,11 @@ export default function MonitorTab() {
         <div className="flex items-center justify-between">
           <p className="panel-label">{mode === "live" ? "Live Source" : "Source Video"}</p>
           {mode === "live" && liveView && (
-            monitoring ? (
+            reconnecting ? (
+              <span className="font-mono text-[9px] text-amber flex items-center gap-1.5">
+                <span className="spinner" /> RECONNECTING
+              </span>
+            ) : monitoring ? (
               <span className="font-mono text-[9px] text-teal flex items-center gap-1.5">
                 <span className="dot-live" />
                 {streaming ? "STREAMING · ANALYZING" : "STREAMING"}
@@ -691,16 +808,80 @@ export default function MonitorTab() {
           </div>
         ) : (
           <>
-            {/* Live status bar — only while streaming */}
-            {streaming && (
+            {/* Live status bar — continuous across passes (renders whenever
+                monitoring, not only mid-stream, so it never blanks). */}
+            {(streaming || monitoring) && (
               <LiveStatusBar
                 now={liveNow}
                 status={liveStatus}
                 score={liveScore}
                 processed={liveTicks.length}
                 total={liveTotal}
-                phase={livePhase}
+                phase={
+                  reconnecting ? "Reconnecting…"
+                    : streaming ? livePhase
+                    : "Buffering next window…"
+                }
               />
+            )}
+
+            {/* Slim continuity chip during the inter-pass gap / reconnect. */}
+            {monitoring && !streaming && (
+              <div className="flex items-center gap-2 px-1 -mt-1 animate-fade-in">
+                <span className={reconnecting ? "spinner" : "dot-live"} />
+                <span className="font-mono text-[9px] text-text3">
+                  {reconnecting
+                    ? "Re-establishing live session…"
+                    : "Buffering next window — monitoring stays live"}
+                </span>
+              </div>
+            )}
+
+            {/* Danger alert banner — confirms a real external notification. */}
+            {alert && (peakStatus === "DANGER" || liveStatus === "DANGER") && (
+              <div
+                className="card border px-4 py-3 animate-fade-in flex items-start gap-3"
+                style={{
+                  background: "rgba(248,81,73,0.07)",
+                  borderColor: "rgba(248,81,73,0.35)",
+                }}
+              >
+                <svg className="w-5 h-5 text-crimson flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.8">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                </svg>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-[10px] text-crimson uppercase tracking-wider">
+                      Danger · Action Dispatched
+                    </p>
+                    {alert.sent ? (
+                      <span className="badge-danger text-[9px]">
+                        <span className="dot-danger" />
+                        Sent {alert.sent_at}
+                      </span>
+                    ) : (
+                      <span className="badge-neutral text-[9px]">
+                        {alert.reason === "cooldown" ? "Cooldown" : "Not configured"}
+                      </span>
+                    )}
+                  </div>
+                  {alert.sent ? (
+                    <p className="text-xs text-text2 mt-1 leading-relaxed">
+                      Alerted{" "}
+                      <span className="text-crimson font-medium">
+                        {alert.channels.join(", ")}
+                      </span>
+                      {" "}— {alert.message}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-text3 mt-1 leading-relaxed">
+                      {alert.reason === "cooldown"
+                        ? "Recent alert already sent — suppressing duplicates."
+                        : "Set SLACK_WEBHOOK_URL / DISCORD_WEBHOOK_URL / ALERT_WEBHOOK_URL (or Twilio) to dispatch real alerts to staff."}
+                    </p>
+                  )}
+                </div>
+              </div>
             )}
 
             {/* Synchronized replay — real frames ↔ pressure field, slow + scrubbable */}
@@ -844,6 +1025,13 @@ export default function MonitorTab() {
             {(() => {
               const fc = result?.forecast ?? liveForecast;
               return fc && !fc.error ? <ForecastPanel forecast={fc} /> : null;
+            })()}
+
+            {/* Intervention impact — world-model proof the recommended fix
+                lowers projected risk (do nothing vs with action). */}
+            {(() => {
+              const cf = result?.counterfactual ?? counterfactual;
+              return cf && !cf.error ? <InterventionImpact cf={cf} /> : null;
             })()}
 
             {/* Minutes-ahead risk outlook (statistical trend projection) */}

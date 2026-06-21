@@ -94,6 +94,7 @@ from claude_interpreter import (
     event_plan_points,
 )
 from simulation_engine import VenueConfig, VenueElement, CrowdSimulator
+from alerts import send_danger_alert
 
 # ── LOAD MODELS ONCE AT STARTUP ───────────────────────────────────────────────
 
@@ -294,6 +295,109 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
         return result
     except Exception as exc:  # forecast is best-effort; never break analysis
         return {"error": str(exc)}
+
+
+def _counterfactual(feat_history: list[np.ndarray], action_idx: int,
+                    action_name: str, action_desc: str,
+                    current_prob: float, fps: float,
+                    horizon_steps: int = 36) -> dict | None:
+    """
+    'Prove the fix works' — project the crowd's risk forward TWO ways from the
+    current moment: doing nothing vs applying the RL-recommended intervention.
+
+    The intervention is applied as a latent perturbation via
+    DynaTrainer.apply_action_effect — the exact effect model the RL policy was
+    trained against — then rolled through the world model just like
+    _forecast_future, so both trajectories share an identical risk scale. The
+    gap between the two curves is the projected impact of acting now.
+
+    Returns a dict the Monitor UI renders as a do-nothing vs with-action
+    comparison, or None / {"error": ...} if it can't be computed.
+    """
+    if len(feat_history) < 5:
+        return None
+    try:
+        seq = np.asarray(feat_history[-60:], dtype=np.float32)
+        x = torch.from_numpy(seq).unsqueeze(0)            # (1, T, 256)
+        with torch.no_grad():
+            z = _wm.encode_sequence(x)                    # (1, T, 64)
+            base_dec0 = _wm.decoder(z[:, -1, :]).cpu().numpy()[0]
+            z_last = z[:, -1:, :]                          # (1, 1, 64)
+
+            def _rollout(perturb: int | None) -> np.ndarray:
+                # Re-prime the LSTM on the full observed history so both
+                # rollouts start from an identical context (mirrors
+                # _forecast_future), then optionally perturb the starting
+                # latent with the intervention effect before autoregressing.
+                _wm.transition.hidden = None
+                _wm.transition(z, reset_hidden=True)
+                cur = z_last
+                if perturb is not None:
+                    cur = _trainer.apply_action_effect(
+                        cur.squeeze(1), perturb).unsqueeze(1)
+                outs = []
+                for _ in range(horizon_steps):
+                    mu, _lv = _wm.transition(cur, reset_hidden=False)
+                    cur = mu
+                    outs.append(mu[0, 0])
+                return _wm.decoder(torch.stack(outs)).cpu().numpy()
+
+            dec_base = _rollout(None)
+            dec_act = _rollout(int(action_idx))
+
+        def _intensity(f: np.ndarray) -> float:
+            return float(np.abs(f[2::4]).mean() + np.abs(f[3::4]).mean())
+
+        p0 = max(_intensity(base_dec0), 1e-6)
+        base = max(float(current_prob), 0.02) * 100.0
+
+        def _curve(dec: np.ndarray):
+            pts, worst = [], -1.0
+            for i, f in enumerate(dec):
+                risk = float(np.clip(base * _intensity(f) / p0, 1.0, 99.0))
+                pts.append({"t": round((i + 1) / max(fps, 1e-3), 1),
+                            "risk": round(risk, 1)})
+                worst = max(worst, risk)
+            return pts, round(worst, 1)
+
+        pts_base, worst_base = _curve(dec_base)
+        pts_act, worst_act = _curve(dec_act)
+
+        return {
+            "action_idx":         int(action_idx),
+            "action_name":        action_name,
+            "action_description": action_desc,
+            "do_nothing_risk":    worst_base,
+            "action_risk":        worst_act,
+            "reduction_pct":      round(max(0.0, worst_base - worst_act), 1),
+            "points_do_nothing":  pts_base,
+            "points_action":      pts_act,
+            "horizon_s":          round(horizon_steps / max(fps, 1e-3), 1),
+        }
+    except Exception as exc:  # counterfactual is best-effort; never break
+        return {"error": str(exc)}
+
+
+def _maybe_alert(venue: str, peak_physics: dict | None,
+                 counterfactual: dict | None) -> dict | None:
+    """
+    Fire a real external danger alert (Slack/Discord/webhook/SMS) for a confirmed
+    DANGER peak. Best-effort and cooldown-guarded inside alerts.send_danger_alert;
+    returns the status dict the stream surfaces to the UI, or None on failure.
+    """
+    if not peak_physics:
+        return None
+    iv = peak_physics.get("intervention") or {}
+    try:
+        return send_danger_alert({
+            "venue":          venue,
+            "probability":    round(peak_physics.get("probability", 0.0) * 100, 1),
+            "score":          peak_physics.get("score"),
+            "action_name":    iv.get("action_name"),
+            "counterfactual": counterfactual,
+        })
+    except Exception as exc:  # alerting must never break analysis
+        return {"sent": False, "reason": f"error: {exc}", "channels": []}
 
 
 # Minutes-ahead projection knobs (statistical trend, NOT the world-model rollout).
@@ -567,6 +671,17 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
     forecast = _forecast_future(feat_history, cur_prob, fps)
     trend = _project_trend(timeline)
 
+    # ── COUNTERFACTUAL + ALERT: prove the recommended fix works, then notify ──
+    counterfactual = None
+    alert = None
+    iv = (peak_physics or {}).get("intervention")
+    if iv and iv.get("action_idx") is not None:
+        counterfactual = _counterfactual(
+            feat_history, iv["action_idx"], iv.get("action_name", ""),
+            iv.get("action_description", ""), cur_prob, fps)
+    if (peak_physics or {}).get("status") == "DANGER":
+        alert = _maybe_alert(venue, peak_physics, counterfactual)
+
     trace = _build_trace(cal_n, timeline, peak_score, forecast,
                          last_claude, did_claude, last_rl, peak_physics)
 
@@ -580,6 +695,8 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
         "peak_physics":    peak_physics,
         "forecast":        forecast,
         "trend":           trend,
+        "counterfactual":  counterfactual,
+        "alert":           alert,
         "hotspot":         (_danger_hotspot(peak_flow)
                             if peak_flow is not None else None),
         "agent_trace":     trace,
@@ -750,6 +867,15 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
         except Exception:
             pass
 
+        # ── COUNTERFACTUAL: world-model proof that the fix lowers risk ───────
+        counterfactual = None
+        iv = (peak_physics or {}).get("intervention")
+        if iv and iv.get("action_idx") is not None:
+            counterfactual = _counterfactual(
+                feat_history, iv["action_idx"], iv.get("action_name", ""),
+                iv.get("action_description", ""),
+                (peak_physics or {}).get("probability", 0.0), fps)
+
         trace = _build_trace(cal_n, timeline, peak_score, final_forecast,
                              last_claude, did_claude, last_rl, peak_physics)
 
@@ -764,6 +890,12 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
             except Exception:
                 pass
 
+        # ── REAL EXTERNAL ALERT: notify staff on DANGER (best-effort) ────────
+        if (peak_physics or {}).get("status") == "DANGER":
+            alert = _maybe_alert(venue, peak_physics, counterfactual)
+            if alert:
+                yield _ndjson({"type": "alert", **alert})
+
         yield _ndjson({
             "type":            "done",
             "summary":         summary,
@@ -773,6 +905,7 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
             "peak_physics":    peak_physics,
             "forecast":        final_forecast,
             "trend":           _project_trend(timeline),
+            "counterfactual":  counterfactual,
             "hotspot":         (_danger_hotspot(peak_flow)
                                 if peak_flow is not None else None),
             "peak_frame_b64":  (_frame_to_b64(peak_frame)
