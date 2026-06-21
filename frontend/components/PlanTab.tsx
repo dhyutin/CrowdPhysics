@@ -231,11 +231,18 @@ export default function PlanTab() {
 
         {result?.layout && (
           <div className="card p-4 animate-fade-in flex flex-col gap-2">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <p className="panel-label">Reconstruction</p>
-              <span className="badge-teal text-[9px] px-1.5 py-0.5">
-                {Math.round((result.layout.confidence ?? 0) * 100)}% conf
-              </span>
+              <div className="flex items-center gap-1.5">
+                {result.layout.archetype && (
+                  <span className="badge-neutral text-[9px] px-1.5 py-0.5 uppercase tracking-wide">
+                    {result.layout.archetype}
+                  </span>
+                )}
+                <span className="badge-teal text-[9px] px-1.5 py-0.5">
+                  {Math.round((result.layout.confidence ?? 0) * 100)}% conf
+                </span>
+              </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
               {[

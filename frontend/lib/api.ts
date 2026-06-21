@@ -389,12 +389,32 @@ export interface DangerZone {
   risk: "HIGH" | "CRITICAL";
 }
 
+export type VenueShape = "box" | "cylinder" | "tiered" | "dome" | "ramp" | "canopy";
+
 export interface VenueLayoutElement {
   type: "stage" | "wall" | "barrier" | "entry" | "gate";
   x: number;
   y: number;
   w: number;
   h: number;
+  height?: number; // relative 3D extrusion height 0-1
+  shape?: VenueShape;
+  label?: string;
+}
+
+export type VenueArchetype =
+  | "stadium" | "arena" | "theater" | "hall"
+  | "plaza" | "street" | "field" | "festival";
+
+export type DecorType = "screen" | "tower" | "tent" | "tree" | "roof";
+
+export interface DecorProp {
+  type: DecorType;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  height?: number;
   label?: string;
 }
 
@@ -402,9 +422,11 @@ export interface VenueLayout {
   name: string;
   capacity: number;
   view: string;
+  archetype?: VenueArchetype;
   confidence: number;
   notes: string;
   elements: VenueLayoutElement[];
+  decor?: DecorProp[];
 }
 
 export interface SimulateResult {

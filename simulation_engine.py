@@ -28,6 +28,9 @@ class VenueElement:
     h: float        # 0–1 normalized height
     capacity: int = 0
     label: str = ""
+    # Visual-only 3D massing (ignored by the simulator, used by the 3D renderer).
+    height: float = 0.0   # relative 0–1 extrusion height
+    shape: str = ""       # box | cylinder | tiered | dome | ramp | canopy
 
 
 @dataclass

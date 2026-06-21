@@ -402,10 +402,13 @@ def extract_venue_layout(image_b64, media_type="image/jpeg", capacity_hint=None)
         model="claude-sonnet-4-6",
         max_tokens=1200,
         system=(
-            "You are a crowd-safety surveyor. You convert an image of a venue "
-            "into a TOP-DOWN floor plan of simple rectangles for a crowd "
-            "fluid-dynamics simulator. If the image is a ground-level photo, "
-            "mentally reconstruct the overhead plan. Output ONLY valid JSON."
+            "You are a crowd-safety surveyor AND a 3D reconstruction artist. "
+            "You convert an image of a venue into a TOP-DOWN floor plan of "
+            "rectangles for a crowd fluid-dynamics simulator, AND you describe "
+            "the venue's 3D massing (heights, shapes, archetype, decor) so it "
+            "can be rebuilt as a 3D model that looks like the real place. "
+            "If the image is a ground-level photo, mentally reconstruct the "
+            "overhead plan and infer heights. Output ONLY valid JSON."
         ),
         messages=[{
             "role": "user",
@@ -420,22 +423,39 @@ def extract_venue_layout(image_b64, media_type="image/jpeg", capacity_hint=None)
                 },
                 {
                     "type": "text",
-                    "text": f"""Analyse this venue and return its top-down layout.{hint_txt}
+                    "text": f"""Analyse this venue and return BOTH its top-down layout AND its 3D form.{hint_txt}
 
 Coordinate system: normalized 0-1, origin TOP-LEFT, x = right, y = down.
 Every element is a rectangle: x,y = top-left corner, w,h = width/height (all 0-1).
 
 Element types (use these exactly):
   "stage"   — performance area / focal point crowds push toward (obstacle)
-  "wall"    — solid barrier / building edge / fence (obstacle)
+  "wall"    — solid barrier / building edge / fence / tiered stands (obstacle)
   "barrier" — internal divider, pillar, structure crowds cannot pass (obstacle)
   "entry"   — where crowd ENTERS / arrives from (a source of people)
   "gate"    — EXIT / egress where crowd can LEAVE (a drain)
 
+For EACH element also give its 3D form so the model looks like the real place:
+  "height"  — relative height 0-1 (0.05 flat ground markings, 0.3 barrier,
+              0.6 stage/low stand, 1.0 tall wall/building/tall stand)
+  "shape"   — one of: "box" (default), "cylinder" (pillar/tower/round),
+              "tiered" (sloped seating stand / stadium bowl section),
+              "dome" (domed roof), "ramp" (sloped surface), "canopy" (flat roof on legs)
+
+Top level:
+  "archetype" — the venue's overall form, one of:
+      "stadium" | "arena" | "theater" | "hall" | "plaza" | "street" | "field" | "festival"
+
+"decor" — VISUAL-ONLY props that make it recognizable but do NOT block crowds
+  (do not affect the simulation). Each: {{type, x, y, w, h, height, label}} where
+  type ∈ "screen" (big LED screen/scoreboard) | "tower" (light/speaker tower) |
+         "tent" (marquee/booth) | "tree" (tree/greenery) | "roof" (overhead canopy).
+
 Rules:
 - Always include the 4 perimeter walls forming the venue boundary.
 - Include at least one "entry" and at least one "gate".
-- 6-20 elements total. Keep it simple and physically plausible.
+- 6-20 layout elements + 0-10 decor props. Keep it physically plausible.
+- Use "tiered" shape for stadium/arena seating stands so the bowl reads in 3D.
 - Give each entry/gate/stage a short human label (e.g. "MAIN GATE", "STAGE").
 - Estimate realistic total capacity from the visible floor area.
 
@@ -444,10 +464,14 @@ Output ONLY this JSON (no markdown):
   "name": "short venue name you infer",
   "capacity": 0,
   "view": "overhead|ground|floorplan",
+  "archetype": "stadium|arena|theater|hall|plaza|street|field|festival",
   "confidence": 0.0,
   "notes": "one sentence on what you saw and any assumptions",
   "elements": [
-    {{"type": "wall", "x": 0.0, "y": 0.0, "w": 1.0, "h": 0.04, "label": ""}}
+    {{"type": "wall", "x": 0.0, "y": 0.0, "w": 1.0, "h": 0.04, "height": 1.0, "shape": "box", "label": ""}}
+  ],
+  "decor": [
+    {{"type": "screen", "x": 0.4, "y": 0.02, "w": 0.2, "h": 0.02, "height": 0.7, "label": "BIG SCREEN"}}
   ]
 }}"""
                 },
@@ -473,12 +497,22 @@ Output ONLY this JSON (no markdown):
             "name": "Unrecognized Venue",
             "capacity": int(capacity_hint or 5000),
             "view": "unknown",
+            "archetype": "hall",
             "confidence": 0.0,
             "notes": "Vision parse failed — using a generic rectangular hall.",
             "elements": [],
+            "decor": [],
         }
 
     return _sanitize_layout(layout, capacity_hint)
+
+
+_SHAPES = {"box", "cylinder", "tiered", "dome", "ramp", "canopy"}
+_ARCHETYPES = {"stadium", "arena", "theater", "hall", "plaza", "street",
+               "field", "festival"}
+_DECOR_TYPES = {"screen", "tower", "tent", "tree", "roof"}
+_DEFAULT_HEIGHT = {"wall": 1.0, "stage": 0.55, "barrier": 0.32,
+                   "entry": 0.05, "gate": 0.05}
 
 
 def _sanitize_layout(layout, capacity_hint=None):
@@ -491,6 +525,17 @@ def _sanitize_layout(layout, capacity_hint=None):
         except (TypeError, ValueError):
             return default
         return max(0.0, min(1.0, v))
+
+    def shape_of(el):
+        s = str(el.get("shape", "")).lower().strip()
+        return s if s in _SHAPES else "box"
+
+    def height_of(el, etype):
+        try:
+            hv = float(el.get("height"))
+        except (TypeError, ValueError):
+            return _DEFAULT_HEIGHT.get(etype, 0.4)
+        return max(0.02, min(1.0, hv))
 
     clean_elements = []
     for el in (layout.get("elements") or [])[:30]:
@@ -511,26 +556,54 @@ def _sanitize_layout(layout, capacity_hint=None):
             "type": etype,
             "x": round(x, 3), "y": round(y, 3),
             "w": round(w, 3), "h": round(h, 3),
+            "height": round(height_of(el, etype), 3),
+            "shape": shape_of(el),
             "label": str(el.get("label", ""))[:24],
+        })
+
+    # Visual-only decor props (never enter the simulation).
+    clean_decor = []
+    for d in (layout.get("decor") or [])[:12]:
+        dtype = str(d.get("type", "")).lower().strip()
+        if dtype not in _DECOR_TYPES:
+            continue
+        x = clamp01(d.get("x"))
+        y = clamp01(d.get("y"))
+        w = clamp01(d.get("w"), 0.05) or 0.05
+        h = clamp01(d.get("h"), 0.05) or 0.05
+        w = min(w, 1.0 - x)
+        h = min(h, 1.0 - y)
+        if w <= 0.0 or h <= 0.0:
+            continue
+        try:
+            dh = float(d.get("height"))
+        except (TypeError, ValueError):
+            dh = 0.5
+        clean_decor.append({
+            "type": dtype,
+            "x": round(x, 3), "y": round(y, 3),
+            "w": round(w, 3), "h": round(h, 3),
+            "height": round(max(0.05, min(1.0, dh)), 3),
+            "label": str(d.get("label", ""))[:24],
         })
 
     # Guarantee a usable venue even if vision was sparse.
     have = {e["type"] for e in clean_elements}
     if "wall" not in have:
         clean_elements += [
-            {"type": "wall", "x": 0.0,  "y": 0.0,  "w": 1.0,  "h": 0.04, "label": ""},
-            {"type": "wall", "x": 0.0,  "y": 0.96, "w": 1.0,  "h": 0.04, "label": ""},
-            {"type": "wall", "x": 0.0,  "y": 0.0,  "w": 0.04, "h": 1.0,  "label": ""},
-            {"type": "wall", "x": 0.96, "y": 0.0,  "w": 0.04, "h": 1.0,  "label": ""},
+            {"type": "wall", "x": 0.0,  "y": 0.0,  "w": 1.0,  "h": 0.04, "height": 1.0, "shape": "box", "label": ""},
+            {"type": "wall", "x": 0.0,  "y": 0.96, "w": 1.0,  "h": 0.04, "height": 1.0, "shape": "box", "label": ""},
+            {"type": "wall", "x": 0.0,  "y": 0.0,  "w": 0.04, "h": 1.0,  "height": 1.0, "shape": "box", "label": ""},
+            {"type": "wall", "x": 0.96, "y": 0.0,  "w": 0.04, "h": 1.0,  "height": 1.0, "shape": "box", "label": ""},
         ]
     if "entry" not in have:
         clean_elements.append(
             {"type": "entry", "x": 0.38, "y": 0.87, "w": 0.24, "h": 0.08,
-             "label": "MAIN ENTRY"})
+             "height": 0.05, "shape": "box", "label": "MAIN ENTRY"})
     if "gate" not in have:
         clean_elements.append(
             {"type": "gate", "x": 0.04, "y": 0.45, "w": 0.08, "h": 0.10,
-             "label": "EXIT A"})
+             "height": 0.05, "shape": "box", "label": "EXIT A"})
 
     try:
         cap = int(layout.get("capacity") or capacity_hint or 5000)
@@ -543,13 +616,19 @@ def _sanitize_layout(layout, capacity_hint=None):
     except (TypeError, ValueError):
         conf = 0.0
 
+    archetype = str(layout.get("archetype", "")).lower().strip()
+    if archetype not in _ARCHETYPES:
+        archetype = "hall"
+
     return {
         "name": str(layout.get("name", "Detected Venue"))[:60],
         "capacity": cap,
         "view": str(layout.get("view", "unknown"))[:20],
+        "archetype": archetype,
         "confidence": round(max(0.0, min(1.0, conf)), 2),
         "notes": str(layout.get("notes", ""))[:280],
         "elements": clean_elements,
+        "decor": clean_decor,
     }
 
 

@@ -432,22 +432,41 @@ export default function MonitorTab() {
 
     const failed = !!error;
     const fails = failCountRef.current;
+    // Only tear down + rebuild the whole session when the feed looks truly dead.
+    // Transient blips (including stalls) first retry on the SAME warm session;
+    // a full reconnect only escalates after several failures or a clearly
+    // session-shaped error, so we don't reconnect on every hiccup.
     const sessionLikelyDead =
-      fails >= 2 ||
-      /session|closed|websocket|navigat|timeout|disconnect|stall/i.test(error ?? "");
-    // Capped exponential backoff on failure (1s,2s,4s,max 8s); tiny gap when healthy.
-    const delay = failed ? Math.min(8000, 1000 * 2 ** Math.min(fails, 3)) : 300;
+      fails >= 4 ||
+      /session|closed|websocket|navigat|disconnect/i.test(error ?? "");
+    // Capped exponential backoff on failure (1s,2s,4s,8s,16s,max 30s); tiny gap when healthy.
+    const delay = failed ? Math.min(30000, 1000 * 2 ** Math.min(fails, 5)) : 300;
 
     let cancelled = false;
     const id = setTimeout(async () => {
       if (cancelled || streaming) return;
 
       if (failed && sessionLikelyDead && !reprovisionRef.current) {
+        // Bound reconnects: a feed that can't be captured (bad URL, no video,
+        // page needs interaction) will never recover by reconnecting — so stop
+        // cleanly with a clear message instead of looping forever.
+        if (reconnectAttemptsRef.current >= MAX_RECONNECTS) {
+          setMonitoring(false);
+          setReconnecting(false);
+          setLivePhase("Disconnected");
+          setError(
+            "Couldn't hold a live connection after several attempts. " +
+            "Check the stream URL and that the page actually shows live video, " +
+            "then start the monitor again.");
+          return;
+        }
         // Re-provision a fresh cloud browser, then let the liveSession change
         // re-trigger this effect to run the next pass cleanly.
         reprovisionRef.current = true;
+        reconnectAttemptsRef.current += 1;
         setReconnecting(true);
-        setLivePhase("Reconnecting…");
+        setLivePhase(
+          `Reconnecting… (${reconnectAttemptsRef.current}/${MAX_RECONNECTS})`);
         try {
           if (liveSession) endLiveSession(liveSession);
           const s = await startLiveSession(liveUrl.trim());
@@ -481,12 +500,15 @@ export default function MonitorTab() {
   // instead of freezing on a dead stream.
   useEffect(() => {
     if (!streaming) return;
-    const STALL_MS = 15000;
+    const STALL_MS = 30000;
     const iv = setInterval(() => {
       if (Date.now() - lastTickRef.current > STALL_MS) {
+        // A stall is a soft failure: it retries on the SAME warm session first
+        // (not a regex match for sessionLikelyDead), only escalating to a full
+        // reconnect after repeated failures.
         failCountRef.current += 1;
         abortRef.current?.abort();
-        setError("stream stalled — watchdog triggered reconnect");
+        setError("stream stalled — retrying");
       }
     }, 3000);
     return () => clearInterval(iv);

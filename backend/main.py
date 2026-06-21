@@ -1475,36 +1475,39 @@ async def plan(
 # Canonical extra elements used to synthesise alternative scenarios. Placed one
 # cell inside the perimeter walls so they act as real drains (not blocked).
 _PERIMETER_EXITS = [
-    VenueElement("gate", 0.05, 0.43, 0.05, 0.16, label="EXIT L"),
-    VenueElement("gate", 0.90, 0.43, 0.05, 0.16, label="EXIT R"),
-    VenueElement("gate", 0.42, 0.90, 0.16, 0.05, label="EXIT S"),
-    VenueElement("gate", 0.42, 0.07, 0.16, 0.05, label="EXIT N"),
+    VenueElement("gate", 0.05, 0.43, 0.05, 0.16, label="EXIT L", height=0.05, shape="box"),
+    VenueElement("gate", 0.90, 0.43, 0.05, 0.16, label="EXIT R", height=0.05, shape="box"),
+    VenueElement("gate", 0.42, 0.90, 0.16, 0.05, label="EXIT S", height=0.05, shape="box"),
+    VenueElement("gate", 0.42, 0.07, 0.16, 0.05, label="EXIT N", height=0.05, shape="box"),
 ]
 _LANE_BARRIERS = [
-    VenueElement("barrier", 0.34, 0.42, 0.02, 0.26, label="LANE A"),
-    VenueElement("barrier", 0.64, 0.42, 0.02, 0.26, label="LANE B"),
+    VenueElement("barrier", 0.34, 0.42, 0.02, 0.26, label="LANE A", height=0.28, shape="box"),
+    VenueElement("barrier", 0.64, 0.42, 0.02, 0.26, label="LANE B", height=0.28, shape="box"),
 ]
 
 
 def _clone_elements(elements: list[VenueElement]) -> list[VenueElement]:
-    return [VenueElement(e.type, e.x, e.y, e.w, e.h, e.capacity, e.label)
+    return [VenueElement(e.type, e.x, e.y, e.w, e.h, e.capacity, e.label,
+                         e.height, e.shape)
             for e in elements]
 
 
 def _venue_to_layout_dict(config: VenueConfig, base_layout: dict | None) -> dict:
-    """Build a frontend VenueLayout dict from a VenueConfig."""
+    """Build a frontend VenueLayout dict from a VenueConfig, preserving 3D form."""
     base = base_layout or {}
     return {
         "name":       config.name,
         "capacity":   config.total_capacity,
         "view":       base.get("view", "reconstructed"),
+        "archetype":  base.get("archetype", "hall"),
         "confidence": base.get("confidence", 0.0),
         "notes":      base.get("notes", ""),
         "elements": [
             {"type": e.type, "x": e.x, "y": e.y, "w": e.w, "h": e.h,
-             "label": e.label}
+             "height": e.height, "shape": e.shape or "box", "label": e.label}
             for e in config.elements
         ],
+        "decor": base.get("decor", []),
     }
 
 
@@ -1516,7 +1519,9 @@ def _generate_scenarios(base_layout: dict, capacity: int) -> list[dict]:
     """
     base_elements = [
         VenueElement(e["type"], e["x"], e["y"], e["w"], e["h"],
-                     label=e.get("label", ""))
+                     label=e.get("label", ""),
+                     height=float(e.get("height", 0.0) or 0.0),
+                     shape=str(e.get("shape", "") or ""))
         for e in base_layout.get("elements", [])
     ]
     name = base_layout.get("name", "Venue")
