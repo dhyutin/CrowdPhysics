@@ -70,6 +70,39 @@ export async function runSimulation(
   return res.json();
 }
 
+export async function simulateFromImage(
+  file: File,
+  capacity: number,
+  density: number
+): Promise<SimulateResult> {
+  const form = new FormData();
+  form.append("image", file);
+  form.append("capacity", String(capacity));
+  form.append("density", String(density));
+  const res = await fetch(`${BASE}/api/simulate_from_image`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function planEvent(
+  file: File,
+  purpose: string,
+  capacity: number,
+  density: number
+): Promise<PlanResult> {
+  const form = new FormData();
+  form.append("image", file);
+  form.append("purpose", purpose);
+  form.append("capacity", String(capacity));
+  form.append("density", String(density));
+  const res = await fetch(`${BASE}/api/plan`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function runDiscover(): Promise<DiscoverResult> {
   const res = await fetch(`${BASE}/api/discover`);
   if (!res.ok) throw new Error(await res.text());
@@ -91,6 +124,29 @@ export interface TimelinePoint {
   probability: number;
 }
 
+export interface ForecastPoint {
+  t: number;
+  risk: number;
+}
+
+export interface Forecast {
+  points?: ForecastPoint[];
+  lead_time_s?: number | null;
+  horizon_s?: number;
+  projected_status?: "SAFE" | "WARNING" | "DANGER";
+  projected_risk?: number;
+  projected_field_b64?: string;
+  error?: string;
+}
+
+export interface AgentTraceStep {
+  agent: string;
+  icon: string;
+  action: string;
+  detail: string;
+  status: "ok" | "danger";
+}
+
 export interface AnalyzeResult {
   peak_frame_b64: string | null;
   summary: string;
@@ -98,6 +154,8 @@ export interface AnalyzeResult {
   rl_explanation: string;
   timeline: TimelinePoint[];
   peak_physics: Record<string, unknown> | null;
+  forecast?: Forecast | null;
+  agent_trace?: AgentTraceStep[];
 }
 
 export interface CaptureSource {
@@ -124,6 +182,24 @@ export interface DangerZone {
   risk: "HIGH" | "CRITICAL";
 }
 
+export interface VenueLayoutElement {
+  type: "stage" | "wall" | "barrier" | "entry" | "gate";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label?: string;
+}
+
+export interface VenueLayout {
+  name: string;
+  capacity: number;
+  view: string;
+  confidence: number;
+  notes: string;
+  elements: VenueLayoutElement[];
+}
+
 export interface SimulateResult {
   frame_b64: string;
   metrics: string;
@@ -131,6 +207,15 @@ export interface SimulateResult {
   danger_zones: DangerZone[];
   safe_capacity: number;
   peak_pressure: number;
+  n_exits?: number;
+  venue_name?: string;
+  layout?: VenueLayout;
+}
+
+export interface PlanResult extends SimulateResult {
+  plan: string;
+  purpose: string;
+  agent_trace: AgentTraceStep[];
 }
 
 export interface DiscoverUnknown {

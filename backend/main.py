@@ -3,10 +3,12 @@
 CrowdPhysics FastAPI backend.
 
 Endpoints:
-  POST /api/analyze   — video file → physics timeline + pressure heatmap
-  POST /api/simulate  — venue config → pressure simulation + safety report
-  GET  /api/discover  — probe world model latent space → Claude hypothesis
-  GET  /api/health    — readiness check
+  POST /api/analyze       — video file → physics timeline + forecast + traces
+  POST /api/monitor_url   — live web feed (Browserbase) → same as analyze
+  POST /api/plan          — venue photo + purpose → layout + sim + agent plan
+  POST /api/simulate      — preset venue config → pressure simulation + report
+  GET  /api/discover      — probe world model latent space → Claude hypothesis
+  GET  /api/health        — readiness check
 """
 
 from __future__ import annotations
@@ -50,6 +52,8 @@ from claude_interpreter import (
     name_discovered_physics,
     explain_rl_decision,
     generate_safety_report,
+    extract_venue_layout,
+    plan_event_layout,
 )
 from simulation_engine import VenueConfig, VenueElement, CrowdSimulator
 
@@ -116,6 +120,90 @@ def _numpy_clean(obj: Any) -> Any:
     return obj
 
 
+def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
+                     fps: float, horizon_steps: int = 36) -> dict | None:
+    """
+    'Potential future of crowds' — roll the world model forward in latent space
+    from the most recent observed state and project the crowd's risk trajectory.
+
+    The world model was trained self-supervised to predict the next latent
+    state. Here we prime it on the observed history, then autoregress with the
+    deterministic mean prediction to imagine the next ~`horizon_steps` frames.
+    Each imagined latent is decoded back to flow features; rising crowd
+    intensity (speed + turbulence) relative to now scales the projected risk.
+
+    Returns a dict the Monitor UI renders as a forecast (curve + projected
+    pressure field + lead-time-to-danger), or None if there isn't enough data.
+    """
+    if len(feat_history) < 5:
+        return None
+    try:
+        seq = np.asarray(feat_history[-60:], dtype=np.float32)
+        x = torch.from_numpy(seq).unsqueeze(0)            # (1, T, 256)
+        with torch.no_grad():
+            z = _wm.encode_sequence(x)                    # (1, T, 64)
+            _wm.transition.hidden = None
+            _wm.transition(z, reset_hidden=True)          # prime hidden on history
+            cur = z[:, -1:, :]                            # (1, 1, 64)
+            future = []
+            for _ in range(horizon_steps):
+                mu, _lv = _wm.transition(cur, reset_hidden=False)
+                cur = mu
+                future.append(mu[0, 0])
+            fut = torch.stack(future)                     # (H, 64)
+            dec = _wm.decoder(fut).cpu().numpy()          # (H, 256)
+            base_dec = _wm.decoder(z[:, -1, :]).cpu().numpy()[0]
+
+        def _intensity(f: np.ndarray) -> float:
+            mag  = np.abs(f[2::4])                        # mean flow magnitude
+            turb = np.abs(f[3::4])                        # turbulence / variance
+            return float(mag.mean() + turb.mean())
+
+        p0 = max(_intensity(base_dec), 1e-6)
+        base = max(float(current_prob), 0.02) * 100.0
+
+        points, worst, worst_i = [], -1.0, 0
+        for i, f in enumerate(dec):
+            ratio = _intensity(f) / p0
+            risk = float(np.clip(base * ratio, 1.0, 99.0))
+            points.append({"t": round((i + 1) / max(fps, 1e-3), 1),
+                           "risk": round(risk, 1)})
+            if risk > worst:
+                worst, worst_i = risk, i
+
+        lead = next((pt["t"] for pt in points if pt["risk"] >= 66.0), None)
+        proj_status = ("DANGER" if worst >= 66 else
+                       "WARNING" if worst >= 40 else "SAFE")
+
+        # Render the projected (imagined) pressure field at its worst moment by
+        # reconstructing a coarse flow field from the decoded means.
+        wf = dec[worst_i].reshape(8, 8, 4)
+        flow_small = np.zeros((8, 8, 2), dtype=np.float32)
+        flow_small[:, :, 0] = wf[:, :, 0]
+        flow_small[:, :, 1] = wf[:, :, 1]
+        flow_big = cv2.resize(flow_small, (640, 480),
+                              interpolation=cv2.INTER_CUBIC) * 6.0
+        proj_state = {"status": proj_status,
+                      "score": round(worst / 40.0, 2),
+                      "probability": worst / 100.0,
+                      "turbulence": float(np.abs(wf[:, :, 3]).mean()),
+                      "backward_flow": 0.0, "boundary_stress": 0.0,
+                      "mean_speed": float(np.abs(wf[:, :, 2]).mean())}
+        field, _ = render_pressure_field(flow_big, proj_state,
+                                         frame_shape=(480, 640))
+
+        return {
+            "points":              points,
+            "lead_time_s":         lead,
+            "horizon_s":           round(horizon_steps / max(fps, 1e-3), 1),
+            "projected_status":    proj_status,
+            "projected_risk":      round(worst, 1),
+            "projected_field_b64": _frame_to_b64(field),
+        }
+    except Exception as exc:  # forecast is best-effort; never break analysis
+        return {"error": str(exc)}
+
+
 def _analyze_frames(frames: list[np.ndarray], fps: float,
                     venue: str) -> dict:
     """
@@ -142,6 +230,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
     _detector.buf.clear()
 
     timeline: list = []
+    feat_history: list = []   # decoded flow features per frame (for forecasting)
     peak_flow = None          # cheapest source — render only the peak, once
     peak_score = -999.0
     peak_physics = None
@@ -159,6 +248,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
 
         flow = extract_flow(sm_prev, sm_curr)
         features = flow_to_features(flow)
+        feat_history.append(features)
         physics = _detector.process_frame(features)
 
         timeline.append({
@@ -206,6 +296,51 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
                    f"Peak: {peak_score:.2f} | "
                    f"Analyzed {total} frames")
 
+    # ── FORECAST: imagine the next frames in latent space ────────────────────
+    cur_prob = (peak_physics.get("probability", 0.0) if peak_physics else 0.0)
+    forecast = _forecast_future(feat_history, cur_prob, fps)
+
+    # ── AGENT TRACE: the sequence of agents that produced this result ─────────
+    trace = [
+        {"agent": "Calibration Agent", "icon": "calibrate",
+         "action": "Established calm baseline",
+         "detail": f"{len(cal_feats)} opening frames used as normal reference",
+         "status": "ok"},
+        {"agent": "World Model", "icon": "brain",
+         "action": "Encoded crowd into latent physics",
+         "detail": f"{total} frames → 64-D self-supervised state space",
+         "status": "ok"},
+        {"agent": "Anomaly Detector", "icon": "pulse",
+         "action": "Scored crush risk per frame",
+         "detail": (f"peak {peak_score:.2f}σ · "
+                    f"{danger_n}/{total} frames flagged danger"),
+         "status": "danger" if danger_n else "ok"},
+    ]
+    if forecast and not forecast.get("error"):
+        lead = forecast.get("lead_time_s")
+        trace.append({
+            "agent": "Forecast Engine", "icon": "forecast",
+            "action": "Projected the crowd's near future",
+            "detail": (f"{forecast['horizon_s']}s horizon · "
+                       + (f"danger in ~{lead}s" if lead
+                          else "no crush projected")),
+            "status": "danger" if lead else "ok"})
+    if did_claude:
+        first_line = (last_claude.split("\n", 1)[0]
+                      if isinstance(last_claude, str) else "")
+        trace.append({
+            "agent": "Claude · Situational Awareness", "icon": "claude",
+            "action": "Briefed the operator",
+            "detail": first_line[:120],
+            "status": "ok"})
+    if last_rl:
+        iv = (peak_physics or {}).get("intervention") or {}
+        trace.append({
+            "agent": "RL Policy", "icon": "shield",
+            "action": "Recommended an intervention",
+            "detail": iv.get("action_name", "intervention selected"),
+            "status": "ok"})
+
     return {
         "peak_frame_b64": _frame_to_b64(peak_frame) if peak_frame is not None else None,
         "summary":         summary,
@@ -213,6 +348,8 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
         "rl_explanation":  last_rl,
         "timeline":        timeline[-60:],
         "peak_physics":    peak_physics,
+        "forecast":        forecast,
+        "agent_trace":     trace,
     }
 
 
@@ -412,6 +549,69 @@ class SimulateRequest(BaseModel):
     density:    float = 0.65
 
 
+def _run_venue_simulation(config: VenueConfig, capacity: int,
+                          density: float, layout: dict | None = None) -> dict:
+    """
+    Shared pre-event simulation: configure → run physics → Claude report.
+
+    Used by both /api/simulate (preset layout) and /api/simulate_from_image
+    (Claude-vision layout). `layout` is the raw vision extraction echoed back
+    to the UI so it can show what was detected.
+    """
+    n_exits = max(1, len({(round(e.x, 3), round(e.y, 3))
+                          for e in config.elements if e.type == "gate"}))
+
+    sim = CrowdSimulator(grid_size=20)
+    sim.configure_from_venue(config)
+    sim.run_steps(n_steps=80, crowd_density=density)
+
+    canvas   = sim.render_simulation(size=(480, 640))
+    danger   = sim.get_danger_zones(threshold=3.0)
+    safe_cap = sim.estimate_safe_capacity(capacity)
+    peak_p   = float(sim.pressure.max())
+
+    metrics = (
+        f"SIMULATION — {config.name}\n"
+        f"Capacity requested : {capacity:,}\n"
+        f"Safe capacity      : {safe_cap:,}\n"
+        f"Peak pressure      : {peak_p:.1f} / 12.0\n"
+        f"Danger zones       : {len(danger)}\n"
+        f"Exits              : {n_exits}\n"
+        + ("⚠  HIGH RISK" if danger else "✓  Layout safe")
+    )
+
+    sim_results = {
+        "n_danger_zones": len(danger),
+        "peak_pressure":  round(peak_p, 2),
+        "safe_capacity":  safe_cap,
+        "danger_zones":   danger[:5],
+        "n_exits":        n_exits,
+    }
+    venue_info = {"name": config.name, "capacity": capacity, "exits": n_exits}
+    if layout:
+        venue_info["layout_notes"] = layout.get("notes", "")
+        venue_info["view"] = layout.get("view", "")
+
+    try:
+        report = generate_safety_report(venue_info, sim_results)
+    except Exception as exc:
+        report = f"(Claude unavailable: {exc})\n\nSafe capacity: {safe_cap:,}."
+
+    result = {
+        "frame_b64":     _frame_to_b64(canvas),
+        "metrics":       metrics,
+        "safety_report": report,
+        "danger_zones":  danger[:10],
+        "safe_capacity": safe_cap,
+        "peak_pressure": peak_p,
+        "n_exits":       n_exits,
+        "venue_name":    config.name,
+    }
+    if layout is not None:
+        result["layout"] = layout
+    return result
+
+
 @app.post("/api/simulate")
 def simulate(req: SimulateRequest):
     """
@@ -450,51 +650,149 @@ def simulate(req: SimulateRequest):
         config.elements.append(
             VenueElement("gate", x, y, 0.08, 0.10, label=label))
 
-    sim = CrowdSimulator(grid_size=20)
-    sim.configure_from_venue(config)
-    sim.run_steps(n_steps=80, crowd_density=req.density)
+    return JSONResponse(_numpy_clean(
+        _run_venue_simulation(config, req.capacity, req.density)))
 
-    canvas     = sim.render_simulation(size=(480, 640))
-    danger     = sim.get_danger_zones(threshold=3.0)
-    safe_cap   = sim.estimate_safe_capacity(req.capacity)
-    peak_p     = float(sim.pressure.max())
 
-    metrics = (
-        f"SIMULATION — {config.name}\n"
-        f"Capacity requested : {req.capacity:,}\n"
-        f"Safe capacity      : {safe_cap:,}\n"
-        f"Peak pressure      : {peak_p:.1f} / 12.0\n"
-        f"Danger zones       : {len(danger)}\n"
-        f"Exits              : {n_exits}\n"
-        + ("⚠  HIGH RISK" if danger else "✓  Layout safe")
-    )
+_VISION_MEDIA = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".webp": "image/webp", ".gif": "image/gif",
+}
 
-    sim_results = {
-        "n_danger_zones": len(danger),
-        "peak_pressure":  round(peak_p, 2),
-        "safe_capacity":  safe_cap,
-        "danger_zones":   danger[:5],
-        "n_exits":        n_exits,
-    }
-    venue_info = {
-        "name":     config.name,
-        "capacity": req.capacity,
-        "exits":    n_exits,
-    }
+
+@app.post("/api/simulate_from_image")
+async def simulate_from_image(
+    image: UploadFile = File(...),
+    capacity: int = Form(default=0),
+    density: float = Form(default=0.65),
+):
+    """
+    Build a venue from a photo / satellite image / floor plan, then run the
+    pre-event simulation on it.
+
+    Claude vision extracts a top-down layout (stage / walls / barriers /
+    entries / exits) which feeds the SAME CrowdSimulator as /api/simulate.
+
+    Returns the simulate payload PLUS `layout` (the detected elements,
+    inferred name, capacity, view and confidence) so the UI can show what
+    was recognised.
+    """
+    suffix = Path(image.filename or "").suffix.lower()
+    media_type = _VISION_MEDIA.get(suffix, "image/jpeg")
+
+    raw = await image.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    image_b64 = base64.b64encode(raw).decode()
+
+    cap_hint = capacity if capacity and capacity > 0 else None
 
     try:
-        report = generate_safety_report(venue_info, sim_results)
+        layout = extract_venue_layout(image_b64, media_type, capacity_hint=cap_hint)
     except Exception as exc:
-        report = f"(Claude unavailable: {exc})\n\nSafe capacity: {safe_cap:,}."
+        raise HTTPException(
+            status_code=502, detail=f"Vision layout extraction failed: {exc}")
 
-    return JSONResponse(_numpy_clean({
-        "frame_b64":     _frame_to_b64(canvas),
-        "metrics":       metrics,
-        "safety_report": report,
-        "danger_zones":  danger[:10],
-        "safe_capacity": safe_cap,
-        "peak_pressure": peak_p,
-    }))
+    elements = [
+        VenueElement(
+            type=e["type"], x=e["x"], y=e["y"], w=e["w"], h=e["h"],
+            label=e.get("label", ""),
+        )
+        for e in layout["elements"]
+    ]
+    final_capacity = cap_hint or layout["capacity"]
+    config = VenueConfig(
+        name=layout["name"],
+        total_capacity=final_capacity,
+        elements=elements,
+    )
+
+    result = _run_venue_simulation(config, final_capacity, density, layout=layout)
+    return JSONResponse(_numpy_clean(result))
+
+
+# ── POST /api/plan ────────────────────────────────────────────────────────────
+
+@app.post("/api/plan")
+async def plan(
+    image:    UploadFile = File(...),
+    purpose:  str   = Form(default="general gathering"),
+    capacity: int   = Form(default=0),
+    density:  float = Form(default=0.65),
+):
+    """
+    Plan mode: photo of a place → virtual simulation → agentic arrangement plan.
+
+    1. Claude vision reconstructs a top-down venue layout from the photo.
+    2. The crowd fluid-dynamics simulator finds the danger zones.
+    3. A planning agent designs how to arrange people/flow/staff for the stated
+       `purpose`, grounded in the simulation.
+
+    Returns the simulate payload PLUS `layout`, `plan`, `purpose` and
+    `agent_trace` so the Plan UI can show the full agent reasoning.
+    """
+    suffix = Path(image.filename or "").suffix.lower()
+    media_type = _VISION_MEDIA.get(suffix, "image/jpeg")
+
+    raw = await image.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    image_b64 = base64.b64encode(raw).decode()
+    cap_hint = capacity if capacity and capacity > 0 else None
+
+    try:
+        layout = extract_venue_layout(image_b64, media_type, capacity_hint=cap_hint)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Vision layout extraction failed: {exc}")
+
+    elements = [
+        VenueElement(type=e["type"], x=e["x"], y=e["y"], w=e["w"], h=e["h"],
+                     label=e.get("label", ""))
+        for e in layout["elements"]
+    ]
+    final_capacity = cap_hint or layout["capacity"]
+    config = VenueConfig(name=layout["name"],
+                         total_capacity=final_capacity, elements=elements)
+
+    result = _run_venue_simulation(config, final_capacity, density, layout=layout)
+
+    sim_results = {
+        "n_danger_zones": result["danger_zones"] and len(result["danger_zones"]),
+        "peak_pressure":  result["peak_pressure"],
+        "safe_capacity":  result["safe_capacity"],
+        "n_exits":        result["n_exits"],
+        "danger_zones":   result["danger_zones"][:5],
+    }
+    try:
+        plan_text = plan_event_layout(layout, sim_results, purpose, final_capacity)
+    except Exception as exc:
+        plan_text = f"(Planning agent unavailable: {exc})"
+
+    n_danger = len(result["danger_zones"])
+    result["plan"] = plan_text
+    result["purpose"] = purpose
+    result["agent_trace"] = [
+        {"agent": "Vision Surveyor", "icon": "eye",
+         "action": "Reconstructed top-down layout",
+         "detail": (f"{len(elements)} elements · "
+                    f"{int(round(layout.get('confidence', 0) * 100))}% confidence"),
+         "status": "ok"},
+        {"agent": "Crowd Simulator", "icon": "pulse",
+         "action": "Ran fluid-dynamics simulation",
+         "detail": (f"peak pressure {result['peak_pressure']:.1f} · "
+                    f"{n_danger} danger zones"),
+         "status": "danger" if n_danger else "ok"},
+        {"agent": "Safety Analyst · Claude", "icon": "claude",
+         "action": "Generated pre-event safety report",
+         "detail": f"safe capacity {result['safe_capacity']:,}",
+         "status": "ok"},
+        {"agent": "Event Planner · Claude", "icon": "plan",
+         "action": "Designed arrangement for purpose",
+         "detail": f"optimized for: {purpose}",
+         "status": "ok"},
+    ]
+    return JSONResponse(_numpy_clean(result))
 
 
 # ── GET /api/discover ─────────────────────────────────────────────────────────

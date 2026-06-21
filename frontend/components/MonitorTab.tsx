@@ -9,6 +9,8 @@ import {
   type MonitorResult,
   type TimelinePoint,
 } from "@/lib/api";
+import AgentTrace from "@/components/AgentTrace";
+import ForecastPanel from "@/components/ForecastPanel";
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
   SAFE:        { badge: "badge-safe",    dot: "dot-live",    label: "Safe" },
@@ -425,8 +427,18 @@ export default function MonitorTab() {
               </div>
             )}
 
+            {/* Forecast — potential future of the crowd */}
+            {result?.forecast && !result.forecast.error && (
+              <ForecastPanel forecast={result.forecast} />
+            )}
+
             {/* Timeline */}
             {result?.timeline && <Timeline points={result.timeline} />}
+
+            {/* Agent trace */}
+            {result?.agent_trace && result.agent_trace.length > 0 && (
+              <AgentTrace steps={result.agent_trace} title="Agent Trace" />
+            )}
 
             {/* Claude */}
             <div className="card flex flex-col">

@@ -257,6 +257,245 @@ Write for the event director, not an engineer. Be direct."""
     return resp.content[0].text
 
 
+# ─── ROLE 6: EVENT PLANNER (purpose-aware arrangement) ───────────────────────
+
+def plan_event_layout(layout, sim_results, purpose, capacity):
+    """
+    Agentic planner: given a detected venue layout, the simulation results and
+    the event's PURPOSE, produce a concrete plan for how to arrange people,
+    barriers and staff so the event is safe for that specific use.
+
+    Args:
+        layout:      dict from extract_venue_layout()
+        sim_results: dict (peak_pressure, n_danger_zones, safe_capacity, ...)
+        purpose:     str — what the space will be used for (concert, rally,
+                     expo, prayer, evacuation drill, sports, market, ...)
+        capacity:    int — expected attendance
+
+    Returns:
+        str — structured arrangement plan for the event organizer.
+    """
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=700,
+        system=(
+            "You are an event crowd-planning agent. Given a venue's top-down "
+            "layout and a crowd fluid-dynamics simulation, you design HOW to "
+            "use the space safely for a stated purpose. Be concrete and spatial "
+            "— reference entries, exits, the stage and the danger zones by their "
+            "positions. Write for an event organizer, not an engineer."
+        ),
+        messages=[{
+            "role": "user",
+            "content": f"""EVENT PURPOSE: {purpose or 'general gathering'}
+EXPECTED ATTENDANCE: {capacity:,}
+
+VENUE (top-down, normalized 0-1 coords, origin top-left):
+{json.dumps({"name": layout.get("name"), "view": layout.get("view"),
+             "elements": layout.get("elements", [])}, indent=2)}
+
+CROWD SIMULATION RESULTS:
+{json.dumps(sim_results, indent=2)}
+
+Produce a plan with EXACTLY these sections:
+ARRANGEMENT: how to position people/zones for this purpose (2-3 sentences, spatial).
+FLOW DESIGN: which entries/exits to use for ingress vs egress, and barrier placement.
+CAPACITY PLAN: recommended attendance for this purpose + why.
+STAFFING: where to place stewards/security relative to danger zones (numbered, max 4).
+RISKS: the top failure mode for THIS purpose and how the layout mitigates it.
+
+Be specific and directive."""
+        }]
+    )
+    return resp.content[0].text
+
+
+# ─── ROLE 5: VISION — VENUE LAYOUT FROM PHOTO ────────────────────────────────
+
+def extract_venue_layout(image_b64, media_type="image/jpeg", capacity_hint=None):
+    """
+    Claude vision: turn a photo / satellite image / floor plan of a venue into
+    a top-down layout of physics primitives the simulator understands.
+
+    The simulation engine is driven entirely by a list of normalized labeled
+    rectangles (VenueElement). This function produces exactly that list so the
+    existing CrowdSimulator can run on a real location with no other changes.
+
+    Args:
+        image_b64:     base64-encoded image bytes (no data: prefix)
+        media_type:    one of image/jpeg | image/png | image/webp | image/gif
+        capacity_hint: optional int — operator's expected attendance
+
+    Returns:
+        dict {
+          "name": str,
+          "capacity": int,
+          "view": "overhead" | "ground" | "floorplan",
+          "confidence": float 0-1,
+          "notes": str,
+          "elements": [ {type, x, y, w, h, label}, ... ]
+        }
+        Coordinates are top-down normalized 0-1, origin top-left.
+        type ∈ {stage, wall, barrier, entry, gate}.
+    """
+    hint_txt = (f"\nThe operator expects roughly {capacity_hint} attendees."
+                if capacity_hint else "")
+
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1200,
+        system=(
+            "You are a crowd-safety surveyor. You convert an image of a venue "
+            "into a TOP-DOWN floor plan of simple rectangles for a crowd "
+            "fluid-dynamics simulator. If the image is a ground-level photo, "
+            "mentally reconstruct the overhead plan. Output ONLY valid JSON."
+        ),
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": image_b64,
+                    },
+                },
+                {
+                    "type": "text",
+                    "text": f"""Analyse this venue and return its top-down layout.{hint_txt}
+
+Coordinate system: normalized 0-1, origin TOP-LEFT, x = right, y = down.
+Every element is a rectangle: x,y = top-left corner, w,h = width/height (all 0-1).
+
+Element types (use these exactly):
+  "stage"   — performance area / focal point crowds push toward (obstacle)
+  "wall"    — solid barrier / building edge / fence (obstacle)
+  "barrier" — internal divider, pillar, structure crowds cannot pass (obstacle)
+  "entry"   — where crowd ENTERS / arrives from (a source of people)
+  "gate"    — EXIT / egress where crowd can LEAVE (a drain)
+
+Rules:
+- Always include the 4 perimeter walls forming the venue boundary.
+- Include at least one "entry" and at least one "gate".
+- 6-20 elements total. Keep it simple and physically plausible.
+- Give each entry/gate/stage a short human label (e.g. "MAIN GATE", "STAGE").
+- Estimate realistic total capacity from the visible floor area.
+
+Output ONLY this JSON (no markdown):
+{{
+  "name": "short venue name you infer",
+  "capacity": 0,
+  "view": "overhead|ground|floorplan",
+  "confidence": 0.0,
+  "notes": "one sentence on what you saw and any assumptions",
+  "elements": [
+    {{"type": "wall", "x": 0.0, "y": 0.0, "w": 1.0, "h": 0.04, "label": ""}}
+  ]
+}}"""
+                },
+            ],
+        }],
+    )
+
+    raw = resp.content[0].text.strip()
+    if "```" in raw:
+        for part in raw.split("```"):
+            candidate = part.strip()
+            if candidate.startswith("json"):
+                candidate = candidate[4:].strip()
+            if candidate.startswith("{"):
+                raw = candidate
+                break
+    raw = raw.strip()
+
+    try:
+        layout = json.loads(raw)
+    except json.JSONDecodeError:
+        layout = {
+            "name": "Unrecognized Venue",
+            "capacity": int(capacity_hint or 5000),
+            "view": "unknown",
+            "confidence": 0.0,
+            "notes": "Vision parse failed — using a generic rectangular hall.",
+            "elements": [],
+        }
+
+    return _sanitize_layout(layout, capacity_hint)
+
+
+def _sanitize_layout(layout, capacity_hint=None):
+    """Clamp/validate a vision-extracted layout so the simulator stays stable."""
+    allowed = {"stage", "wall", "barrier", "entry", "gate"}
+
+    def clamp01(v, default=0.0):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return default
+        return max(0.0, min(1.0, v))
+
+    clean_elements = []
+    for el in (layout.get("elements") or [])[:30]:
+        etype = str(el.get("type", "")).lower().strip()
+        if etype not in allowed:
+            continue
+        x = clamp01(el.get("x"))
+        y = clamp01(el.get("y"))
+        w = clamp01(el.get("w"))
+        h = clamp01(el.get("h"))
+        if w <= 0.0 or h <= 0.0:
+            continue
+        w = min(w, 1.0 - x)
+        h = min(h, 1.0 - y)
+        if w <= 0.0 or h <= 0.0:
+            continue
+        clean_elements.append({
+            "type": etype,
+            "x": round(x, 3), "y": round(y, 3),
+            "w": round(w, 3), "h": round(h, 3),
+            "label": str(el.get("label", ""))[:24],
+        })
+
+    # Guarantee a usable venue even if vision was sparse.
+    have = {e["type"] for e in clean_elements}
+    if "wall" not in have:
+        clean_elements += [
+            {"type": "wall", "x": 0.0,  "y": 0.0,  "w": 1.0,  "h": 0.04, "label": ""},
+            {"type": "wall", "x": 0.0,  "y": 0.96, "w": 1.0,  "h": 0.04, "label": ""},
+            {"type": "wall", "x": 0.0,  "y": 0.0,  "w": 0.04, "h": 1.0,  "label": ""},
+            {"type": "wall", "x": 0.96, "y": 0.0,  "w": 0.04, "h": 1.0,  "label": ""},
+        ]
+    if "entry" not in have:
+        clean_elements.append(
+            {"type": "entry", "x": 0.38, "y": 0.87, "w": 0.24, "h": 0.08,
+             "label": "MAIN ENTRY"})
+    if "gate" not in have:
+        clean_elements.append(
+            {"type": "gate", "x": 0.04, "y": 0.45, "w": 0.08, "h": 0.10,
+             "label": "EXIT A"})
+
+    try:
+        cap = int(layout.get("capacity") or capacity_hint or 5000)
+    except (TypeError, ValueError):
+        cap = int(capacity_hint or 5000)
+    cap = max(100, min(cap, 500_000))
+
+    try:
+        conf = float(layout.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        conf = 0.0
+
+    return {
+        "name": str(layout.get("name", "Detected Venue"))[:60],
+        "capacity": cap,
+        "view": str(layout.get("view", "unknown"))[:20],
+        "confidence": round(max(0.0, min(1.0, conf)), 2),
+        "notes": str(layout.get("notes", ""))[:280],
+        "elements": clean_elements,
+    }
+
+
 # ─── AGENT 1: VENUE AGENT ────────────────────────────────────────────────────
 
 def run_venue_agent(venue_description, save_path="venue_config.json"):

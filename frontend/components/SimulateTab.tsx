@@ -1,7 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { runSimulation, type SimulateResult, type DangerZone } from "@/lib/api";
+import {
+  runSimulation,
+  simulateFromImage,
+  type SimulateResult,
+  type DangerZone,
+  type VenueLayout,
+} from "@/lib/api";
 
 function NumberField({
   label, value, setValue, min, max, step = 1, unit,
@@ -65,13 +71,63 @@ function DangerZoneRow({ z, i }: { z: DangerZone; i: number }) {
   );
 }
 
+const EL_STYLE: Record<string, { fill: string; label: string }> = {
+  stage:   { fill: "#2DD4BF", label: "Stage" },
+  wall:    { fill: "#30363D", label: "Wall" },
+  barrier: { fill: "#A371F7", label: "Barrier" },
+  entry:   { fill: "#3FB950", label: "Entry" },
+  gate:    { fill: "#4493F8", label: "Exit" },
+};
+
+function LayoutPreview({ layout }: { layout: VenueLayout }) {
+  const S = 200;
+  return (
+    <svg viewBox={`0 0 ${S} ${S}`} className="w-full rounded-md bg-void border border-border">
+      <rect x={0} y={0} width={S} height={S} fill="#0D1117" />
+      {layout.elements.map((e, i) => {
+        const st = EL_STYLE[e.type] ?? EL_STYLE.wall;
+        const isObstacle = e.type === "wall" || e.type === "stage" || e.type === "barrier";
+        return (
+          <g key={i}>
+            <rect
+              x={e.x * S} y={e.y * S}
+              width={Math.max(2, e.w * S)} height={Math.max(2, e.h * S)}
+              fill={st.fill} fillOpacity={isObstacle ? 0.85 : 0.55}
+              stroke={st.fill} strokeWidth={1}
+              rx={e.type === "gate" || e.type === "entry" ? 2 : 0}
+            />
+            {e.label && (e.type === "gate" || e.type === "entry" || e.type === "stage") && (
+              <text
+                x={(e.x + e.w / 2) * S} y={(e.y + e.h / 2) * S}
+                fill="#fff" fontSize={6} textAnchor="middle" dominantBaseline="middle"
+                style={{ fontFamily: "monospace" }}
+              >
+                {e.label.slice(0, 14)}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export default function SimulateTab() {
+  const [mode,      setMode]      = useState<"preset" | "photo">("preset");
   const [venueName, setVenueName] = useState("Demo Arena");
   const [capacity,  setCapacity]  = useState("5000");
   const [exits,     setExits]     = useState("2");
+  const [density,   setDensity]   = useState("65");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [loading,   setLoad]      = useState(false);
   const [result,    setResult]    = useState<SimulateResult | null>(null);
   const [error,     setError]     = useState<string | null>(null);
+
+  function onPickImage(f: File | null) {
+    setImageFile(f);
+    setImagePreview(f ? URL.createObjectURL(f) : null);
+  }
 
   async function handleSim() {
     setLoad(true);
@@ -81,7 +137,27 @@ export default function SimulateTab() {
         venue_name: venueName,
         capacity:   parseInt(capacity) || 5000,
         n_exits:    parseInt(exits) || 2,
+        density:    (parseInt(density) || 65) / 100,
       }));
+    } catch (e: unknown) {
+      setError(String(e));
+    } finally {
+      setLoad(false);
+    }
+  }
+
+  async function handleImageSim() {
+    if (!imageFile) { setError("Pick a venue photo first."); return; }
+    setLoad(true);
+    setError(null);
+    try {
+      const res = await simulateFromImage(
+        imageFile,
+        parseInt(capacity) || 0,
+        (parseInt(density) || 65) / 100,
+      );
+      setResult(res);
+      if (res.venue_name) setVenueName(res.venue_name);
     } catch (e: unknown) {
       setError(String(e));
     } finally {
@@ -102,26 +178,121 @@ export default function SimulateTab() {
         <div className="card p-4 flex flex-col gap-3">
           <p className="panel-label">Venue Configuration</p>
 
-          <div>
-            <label className="field-label">Venue Name</label>
-            <input className="input text-sm" value={venueName}
-              onChange={(e) => setVenueName(e.target.value)} />
+          {/* Mode toggle */}
+          <div className="flex gap-1 p-0.5 rounded-md bg-void border border-border">
+            {([["preset", "Preset"], ["photo", "From Photo"]] as const).map(([m, lbl]) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`flex-1 py-1.5 rounded text-[10px] font-mono transition-colors ${
+                  mode === m ? "bg-teal/20 text-teal" : "text-text3 hover:text-text2"
+                }`}
+              >
+                {lbl}
+              </button>
+            ))}
           </div>
 
-          <NumberField label="Expected Attendance" value={capacity} setValue={setCapacity}
-            min={100} step={500} unit="ppl" />
+          {mode === "preset" ? (
+            <>
+              <div>
+                <label className="field-label">Venue Name</label>
+                <input className="input text-sm" value={venueName}
+                  onChange={(e) => setVenueName(e.target.value)} />
+              </div>
 
-          <NumberField label="Exit Gates" value={exits} setValue={setExits}
-            min={1} max={4} unit="gates" />
+              <NumberField label="Expected Attendance" value={capacity} setValue={setCapacity}
+                min={100} step={500} unit="ppl" />
 
-          <button className="btn-primary w-full mt-1" onClick={handleSim} disabled={loading}>
-            {loading ? (
-              <><span className="spinner-white" /> Simulating…</>
-            ) : (
-              <><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16"><path d="M9.5 1L3 9h5.5L7 15l7.5-9H9L9.5 1z" /></svg> Run Simulation</>
-            )}
-          </button>
+              <NumberField label="Exit Gates" value={exits} setValue={setExits}
+                min={1} max={4} unit="gates" />
+
+              <NumberField label="Crowd Density" value={density} setValue={setDensity}
+                min={10} max={100} step={5} unit="%" />
+
+              <button className="btn-primary w-full mt-1" onClick={handleSim} disabled={loading}>
+                {loading ? (
+                  <><span className="spinner-white" /> Simulating…</>
+                ) : (
+                  <><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16"><path d="M9.5 1L3 9h5.5L7 15l7.5-9H9L9.5 1z" /></svg> Run Simulation</>
+                )}
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="font-mono text-[10px] text-text3 leading-tight">
+                Upload an overhead, satellite, or floor-plan image. Claude vision
+                reconstructs the layout, then it runs the physics sim.
+              </p>
+
+              <label className="card-inset rounded-md p-3 flex flex-col items-center gap-2 cursor-pointer hover:border-teal/40 border border-dashed border-border transition-colors">
+                {imagePreview ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={imagePreview} alt="venue" className="w-full h-24 object-cover rounded" />
+                ) : (
+                  <>
+                    <svg className="w-6 h-6 text-text3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5l4.5-4.5 3 3 4.5-4.5 6 6M3 19.5h18a1.5 1.5 0 001.5-1.5V6A1.5 1.5 0 0021 4.5H3A1.5 1.5 0 001.5 6v12A1.5 1.5 0 003 19.5z" />
+                    </svg>
+                    <span className="font-mono text-[10px] text-text3">Click to choose image</span>
+                  </>
+                )}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => onPickImage(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              {imageFile && (
+                <p className="font-mono text-[9px] text-text3 truncate">{imageFile.name}</p>
+              )}
+
+              <NumberField label="Expected Attendance" value={capacity} setValue={setCapacity}
+                min={0} step={500} unit="ppl" />
+
+              <NumberField label="Crowd Density" value={density} setValue={setDensity}
+                min={10} max={100} step={5} unit="%" />
+
+              <button className="btn-primary w-full mt-1" onClick={handleImageSim} disabled={loading || !imageFile}>
+                {loading ? (
+                  <><span className="spinner-white" /> Building…</>
+                ) : (
+                  <><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16"><path d="M9.5 1L3 9h5.5L7 15l7.5-9H9L9.5 1z" /></svg> Build &amp; Simulate</>
+                )}
+              </button>
+            </>
+          )}
         </div>
+
+        {/* Detected layout (photo mode) */}
+        {result?.layout && (
+          <div className="card p-4 animate-fade-in flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <p className="panel-label">Detected Layout</p>
+              <span className="badge-teal text-[9px] px-1.5 py-0.5">
+                {Math.round((result.layout.confidence ?? 0) * 100)}% conf
+              </span>
+            </div>
+            <LayoutPreview layout={result.layout} />
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(EL_STYLE).map(([k, v]) => (
+                <span key={k} className="flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-sm" style={{ background: v.fill }} />
+                  <span className="font-mono text-[8px] text-text3">{v.label}</span>
+                </span>
+              ))}
+            </div>
+            <p className="font-mono text-[9px] text-text3 leading-tight">
+              View: {result.layout.view} · {result.layout.elements.length} elements
+            </p>
+            {result.layout.notes && (
+              <p className="font-mono text-[9px] text-text2 leading-tight italic">
+                “{result.layout.notes}”
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Physics info */}
         <div className="card p-4">
