@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { plan3d, type Plan3DResult } from "@/lib/api";
+import { plan3d, refinePlan3d, type EventIntake as EventIntakePayload, type Plan3DResult } from "@/lib/api";
 import AgentTrace from "@/components/AgentTrace";
 import EventIntake, { type IntakeValue } from "@/components/EventIntake";
 import ScenarioCompare from "@/components/ScenarioCompare";
@@ -27,6 +27,7 @@ const INITIAL_INTAKE: IntakeValue = {
   seating: "standing",
   ingress: "gradual",
   notes: "",
+  areaM2: "",
 };
 
 // Grab one representative frame from a video so the vision agent gets a still.
@@ -82,6 +83,12 @@ export default function PlanTab() {
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(true);
 
+  // "Fix the scene" chat: correct the reconstruction in plain language.
+  type ChatMsg = { role: "user" | "agent"; text: string };
+  const [chat, setChat] = useState<ChatMsg[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [refining, setRefining] = useState(false);
+
   // Refs the 3D render loop reads each animation frame (no re-render needed).
   const frameRef = useRef(0);
   const playingRef = useRef(true);
@@ -116,6 +123,29 @@ export default function PlanTab() {
     setIntake((v) => ({ ...v, ...patch }));
   }
 
+  function intakePayload(): EventIntakePayload {
+    return {
+      purpose: intake.purpose,
+      nPeople: parseInt(intake.nPeople) || 0,
+      density: (parseInt(intake.density) || 65) / 100,
+      durationMin: parseInt(intake.durationMin) || 0,
+      seating: intake.seating,
+      ingress: intake.ingress,
+      notes: intake.notes,
+      areaM2: parseFloat(intake.areaM2) || 0,
+    };
+  }
+
+  // Reset playback to the recommended scenario of a fresh result.
+  function applyResult(res: Plan3DResult) {
+    setResult(res);
+    setSelectedId(res.best_scenario_id);
+    frameRef.current = 0;
+    setFrame(0);
+    playingRef.current = true;
+    setPlaying(true);
+  }
+
   async function handleRun() {
     if (!imageFile) {
       setError("Upload a photo or video of the location first.");
@@ -123,27 +153,33 @@ export default function PlanTab() {
     }
     setLoading(true);
     setError(null);
+    setChat([]);
     try {
       const img = await fileToImage(imageFile);
-      const res = await plan3d(img, {
-        purpose: intake.purpose,
-        nPeople: parseInt(intake.nPeople) || 0,
-        density: (parseInt(intake.density) || 65) / 100,
-        durationMin: parseInt(intake.durationMin) || 0,
-        seating: intake.seating,
-        ingress: intake.ingress,
-        notes: intake.notes,
-      });
-      setResult(res);
-      setSelectedId(res.best_scenario_id);
-      frameRef.current = 0;
-      setFrame(0);
-      playingRef.current = true;
-      setPlaying(true);
+      const res = await plan3d(img, intakePayload());
+      applyResult(res);
     } catch (e: unknown) {
       setError(String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleRefine() {
+    const msg = chatInput.trim();
+    if (!msg || !result?.layout || refining) return;
+    setChatInput("");
+    setChat((c) => [...c, { role: "user", text: msg }]);
+    setRefining(true);
+    setError(null);
+    try {
+      const res = await refinePlan3d(result.layout, msg, intakePayload());
+      applyResult(res);
+      setChat((c) => [...c, { role: "agent", text: res.chat_reply || "Updated the scene." }]);
+    } catch (e: unknown) {
+      setChat((c) => [...c, { role: "agent", text: `Couldn't apply that: ${String(e)}` }]);
+    } finally {
+      setRefining(false);
     }
   }
 
@@ -341,6 +377,63 @@ export default function PlanTab() {
                     onToggle={togglePlay}
                     onScrub={onScrub}
                   />
+                </div>
+              </div>
+
+              {/* Fix the 3D scene — conversational layout editing */}
+              <div className="card flex flex-col animate-fade-in">
+                <div className="panel-header">
+                  <p className="panel-label">Fix the 3D Scene</p>
+                  <span className="badge-teal text-[9px] px-1.5 py-0.5">Scene Editor</span>
+                </div>
+                <div className="p-3 flex flex-col gap-2">
+                  {chat.length === 0 ? (
+                    <p className="font-mono text-[10px] text-text3 leading-snug">
+                      Reconstruction wrong? Tell the agent in plain words — e.g.{" "}
+                      <span className="text-text2">“move the slide to the left”</span>,{" "}
+                      <span className="text-text2">“add an exit on the north wall”</span>,{" "}
+                      <span className="text-text2">“remove the stage”</span>. It edits the
+                      layout and re-runs the simulation.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-1.5 max-h-44 overflow-y-auto">
+                      {chat.map((mmsg, i) => (
+                        <div
+                          key={i}
+                          className={`text-xs leading-snug ${mmsg.role === "user" ? "text-text1" : "text-text2"}`}
+                        >
+                          <span
+                            className={`font-mono text-[9px] mr-1.5 ${mmsg.role === "user" ? "text-lavender" : "text-teal"}`}
+                          >
+                            {mmsg.role === "user" ? "you" : "agent"}
+                          </span>
+                          {mmsg.text}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <input
+                      className="input text-sm flex-1"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleRefine(); }}
+                      placeholder="Describe what to change…"
+                      disabled={refining}
+                    />
+                    <button
+                      className="btn-secondary text-[11px] px-3"
+                      onClick={handleRefine}
+                      disabled={refining || !chatInput.trim()}
+                    >
+                      {refining ? <span className="spinner" /> : "Apply"}
+                    </button>
+                  </div>
+                  {refining && (
+                    <p className="font-mono text-[9px] text-text3">
+                      Editing scene &amp; re-simulating…
+                    </p>
+                  )}
                 </div>
               </div>
 

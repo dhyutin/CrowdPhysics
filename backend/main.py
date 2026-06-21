@@ -5,6 +5,7 @@ CrowdPhysics FastAPI backend.
 Endpoints:
   POST /api/analyze       — video file → physics timeline + forecast + traces
   POST /api/monitor_url   — live web feed (Browserbase) → same as analyze
+  POST /api/monitor_youtube(_stream) — direct YouTube ingest (yt-dlp, no Browserbase)
   POST /api/plan          — venue photo + purpose → layout + sim + agent plan
   POST /api/simulate      — preset venue config → pressure simulation + report
   GET  /api/discover      — probe world model latent space → Claude hypothesis
@@ -90,6 +91,8 @@ from claude_interpreter import (
     explain_rl_decision,
     generate_safety_report,
     extract_venue_layout,
+    extract_scene_props,
+    refine_venue_layout,
     plan_event_layout,
     event_plan_points,
 )
@@ -206,18 +209,30 @@ def _numpy_clean(obj: Any) -> Any:
     return obj
 
 
+# Forecast horizon — how far the world model "imagines" ahead. Defaults to a
+# 2-minute look-ahead. The autoregressive rollout is sub-sampled to at most
+# FORECAST_MAX_STEPS imagined steps (each representing horizon/steps seconds) so
+# the curve spans the full window without unbounded per-tick compute.
+FORECAST_HORIZON_S = float(os.environ.get("STREAM_FORECAST_HORIZON_S", "120"))
+FORECAST_MAX_STEPS = int(os.environ.get("STREAM_FORECAST_MAX_STEPS", "90"))
+
+
 def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
-                     fps: float, horizon_steps: int = 36,
+                     fps: float, horizon_s: float = FORECAST_HORIZON_S,
+                     max_steps: int = FORECAST_MAX_STEPS,
                      render_field: bool = True) -> dict | None:
     """
     'Potential future of crowds' — roll the world model forward in latent space
-    from the most recent observed state and project the crowd's risk trajectory.
+    from the most recent observed state and project the crowd's risk trajectory
+    over the next `horizon_s` seconds (default 2 minutes).
 
     The world model was trained self-supervised to predict the next latent
     state. Here we prime it on the observed history, then autoregress with the
-    deterministic mean prediction to imagine the next ~`horizon_steps` frames.
-    Each imagined latent is decoded back to flow features; rising crowd
-    intensity (speed + turbulence) relative to now scales the projected risk.
+    deterministic mean prediction to imagine the next window. To cover minutes
+    ahead at bounded cost the rollout is sub-sampled to <= `max_steps` imagined
+    steps, each standing in for `horizon_s / n_steps` seconds. Each imagined
+    latent is decoded back to flow features; rising crowd intensity (speed +
+    turbulence) relative to now scales the projected risk.
 
     Returns a dict the Monitor UI renders as a forecast (curve + projected
     pressure field + lead-time-to-danger), or None if there isn't enough data.
@@ -225,6 +240,14 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
     if len(feat_history) < 5:
         return None
     try:
+        fps = max(float(fps), 1e-3)
+        # Number of imagined steps: enough to span the horizon at the capture
+        # rate, but capped so a 2-minute look-ahead stays cheap. dt_eff is the
+        # wall-clock seconds each imagined step represents.
+        target_steps = max(1, int(round(horizon_s * fps)))
+        n_steps = max(1, min(target_steps, max_steps))
+        dt_eff = horizon_s / n_steps
+
         seq = np.asarray(feat_history[-60:], dtype=np.float32)
         x = torch.from_numpy(seq).unsqueeze(0)            # (1, T, 256)
         with torch.no_grad():
@@ -233,7 +256,7 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
             _wm.transition(z, reset_hidden=True)          # prime hidden on history
             cur = z[:, -1:, :]                            # (1, 1, 64)
             future = []
-            for _ in range(horizon_steps):
+            for _ in range(n_steps):
                 mu, _lv = _wm.transition(cur, reset_hidden=False)
                 cur = mu
                 future.append(mu[0, 0])
@@ -253,7 +276,7 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
         for i, f in enumerate(dec):
             ratio = _intensity(f) / p0
             risk = float(np.clip(base * ratio, 1.0, 99.0))
-            points.append({"t": round((i + 1) / max(fps, 1e-3), 1),
+            points.append({"t": round((i + 1) * dt_eff, 1),
                            "risk": round(risk, 1)})
             if risk > worst:
                 worst, worst_i = risk, i
@@ -265,7 +288,7 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
         result = {
             "points":           points,
             "lead_time_s":      lead,
-            "horizon_s":        round(horizon_steps / max(fps, 1e-3), 1),
+            "horizon_s":        round(horizon_s, 1),
             "projected_status": proj_status,
             "projected_risk":   round(worst, 1),
         }
@@ -401,7 +424,8 @@ def _maybe_alert(venue: str, peak_physics: dict | None,
 
 
 # Minutes-ahead projection knobs (statistical trend, NOT the world-model rollout).
-TREND_HORIZON_S = float(os.environ.get("FORECAST_TREND_HORIZON_S", "180"))
+# Defaults to the same 2-minute look-ahead as the world-model forecast.
+TREND_HORIZON_S = float(os.environ.get("FORECAST_TREND_HORIZON_S", "120"))
 TREND_STEP_S = float(os.environ.get("FORECAST_TREND_STEP_S", "10"))
 TREND_FIT_WINDOW_S = float(os.environ.get("FORECAST_TREND_FIT_WINDOW_S", "60"))
 
@@ -1210,6 +1234,75 @@ def monitor_url_stream(req: MonitorURLRequest):
                              headers=_STREAM_HEADERS)
 
 
+# ── POST /api/monitor_youtube(_stream) ────────────────────────────────────────
+#
+# Direct YouTube ingest — NO Browserbase. yt-dlp resolves the underlying media /
+# HLS URL and OpenCV decodes frames straight from it, which is far lower latency
+# than driving a cloud browser and screenshotting it.
+
+class MonitorYouTubeRequest(BaseModel):
+    url:        str
+    venue:      str = "YouTube Live"
+    n_frames:   int = 40
+    read_stride: int = 2   # keep every Nth decoded frame (widens motion gap)
+
+
+def _capture_youtube(req: "MonitorYouTubeRequest"):
+    """Shared capture: resolve + decode frames, raising HTTP errors on failure."""
+    try:
+        from agents.youtube_monitor import capture_youtube_frames
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"YouTube ingest unavailable: {exc}")
+
+    n_frames = max(2, min(req.n_frames, 120))
+    stride = max(1, min(req.read_stride, 6))
+    try:
+        frames, fps, meta = capture_youtube_frames(
+            req.url, n_frames=n_frames, read_stride=stride)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"YouTube capture failed: {exc}")
+
+    if len(frames) < 2:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Decoded only {len(frames)} frame(s) from {req.url}")
+    return frames, fps, meta
+
+
+@app.post("/api/monitor_youtube")
+def monitor_youtube(req: MonitorYouTubeRequest):
+    """Non-streaming YouTube monitor (parity with /api/monitor_url)."""
+    frames, fps, meta = _capture_youtube(req)
+    result = _analyze_frames(frames, fps=fps, venue=req.venue)
+    result["source"] = {
+        "url":             req.url,
+        "frames_captured": len(frames),
+        "capture_fps":     round(float(fps), 2),
+    }
+    return JSONResponse(_numpy_clean(result))
+
+
+@app.post("/api/monitor_youtube_stream")
+def monitor_youtube_stream(req: MonitorYouTubeRequest):
+    """
+    Streaming YouTube monitor. Decodes a short buffer directly from the stream
+    (no Browserbase), then streams its analysis at live pace — same calibrating
+    / tick / done / alert events as the other live endpoints.
+    """
+    frames, fps, meta = _capture_youtube(req)
+
+    def gen():
+        yield _ndjson({"type": "source", "url": req.url,
+                       "frames_captured": len(frames),
+                       "capture_fps": round(float(fps), 2)})
+        yield from _analyze_frames_stream(frames, fps=fps, venue=req.venue)
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson",
+                             headers=_STREAM_HEADERS)
+
+
 # ── POST /api/simulate ────────────────────────────────────────────────────────
 
 class SimulateRequest(BaseModel):
@@ -1584,50 +1677,55 @@ def _fallback_points(best: dict) -> list[str]:
     return pts[:6]
 
 
-@app.post("/api/plan3d")
-async def plan3d(
-    image:        UploadFile = File(...),
-    purpose:      str   = Form(default="general gathering"),
-    n_people:     int   = Form(default=0),
-    density:      float = Form(default=0.65),
-    duration_min: int   = Form(default=0),
-    seating:      str   = Form(default="standing"),
-    ingress:      str   = Form(default="gradual"),
-    notes:        str   = Form(default=""),
-):
+def _capacity_from_area(area_m2: float, seating: str, density: float) -> dict | None:
     """
-    Plan-in-3D: photo -> Claude vision reconstruction -> multi-scenario crowd
-    fluid simulation (with world-model crush scoring) -> ranked layouts +
-    field timelines + Claude event-tailored plan.
+    Estimate a maximum crowd capacity from a usable floor area (m²).
 
-    Returns:
-      layout            detected VenueLayout (echoed for the 3D reconstruction)
-      n_people          attendance used
-      purpose           event purpose
-      scenarios[]       {id,name,description,layout,metrics,danger_zones,field,
-                         rank,is_best}
-      best_scenario_id  id of the winning scenario
-      plan_points[]     concise recommendation bullets
-      plan              full arrangement plan text
-      safety_report     pre-event safety brief
-      agent_trace       UI agent steps
+    Uses standard occupant-density guidance (people per m²), scaled by the
+    'crowd setup' (seated/standing/mixed) and the density slider, and discounts
+    the raw area for circulation routes and obstacles.
     """
-    suffix = Path(image.filename or "").suffix.lower()
-    media_type = _VISION_MEDIA.get(suffix, "image/jpeg")
-
-    raw = await image.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Empty image upload")
-    image_b64 = base64.b64encode(raw).decode()
-
-    cap_hint = n_people if n_people and n_people > 0 else None
     try:
-        layout = extract_venue_layout(image_b64, media_type, capacity_hint=cap_hint)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Vision layout extraction failed: {exc}")
+        area = float(area_m2)
+    except (TypeError, ValueError):
+        return None
+    if area <= 0:
+        return None
 
-    final_capacity = cap_hint or layout.get("capacity", 5000)
+    d = max(0.0, min(1.0, float(density or 0.0)))
+    usable_fraction = 0.78  # gangways, stage, obstacles aren't standable
+    seating = (seating or "standing").lower()
+    if seating == "seated":
+        ppl_per_m2 = 1.0 + d * 0.5    # ~1.0–1.5/m² (fixed seating + aisles)
+    elif seating == "mixed":
+        ppl_per_m2 = 1.5 + d * 1.5    # ~1.5–3.0/m²
+    else:                             # standing
+        ppl_per_m2 = 2.0 + d * 2.0    # ~2.0–4.0/m² (comfortable → dense)
+
+    cap = int(round(area * usable_fraction * ppl_per_m2))
+    return {
+        "area_m2":         round(area, 1),
+        "people_per_m2":   round(ppl_per_m2, 2),
+        "usable_fraction": usable_fraction,
+        "seating":         seating,
+        "max_capacity":    max(1, cap),
+    }
+
+
+def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
+                  duration_min: int, seating: str, ingress: str, notes: str,
+                  area_m2: float = 0.0, n_props: int = 0,
+                  refined: bool = False) -> dict:
+    """
+    Core of the 3D plan: from a (detected or edited) layout, choose the final
+    capacity, simulate every scenario, rank them, and have Claude tailor a plan,
+    report and concise points. Shared by /api/plan3d and /api/plan3d/refine.
+    """
+    cap_hint = n_people if n_people and n_people > 0 else None
+    area_est = _capacity_from_area(area_m2, seating, density)
+    final_capacity = (cap_hint
+                      or (area_est["max_capacity"] if area_est else None)
+                      or layout.get("capacity", 5000))
 
     # ── Simulate every scenario ───────────────────────────────────────────
     variants = _generate_scenarios(layout, final_capacity)
@@ -1636,7 +1734,6 @@ async def plan3d(
         config = v["config"]
         sim = CrowdSimulator(grid_size=20)
         sim.configure_from_venue(config)
-        # run_steps_record settles to steady state AND captures the timeline
         field = sim.run_steps_record(n_steps=80, crowd_density=density, stride=2)
 
         danger   = sim.get_danger_zones(threshold=3.0)
@@ -1651,7 +1748,6 @@ async def plan3d(
             "crush_prob":     round(crush, 3),
             "n_exits":        _n_exits(config),
         }
-        # Lower is safer.
         score = (min(peak_p, 12.0) / 12.0 * 0.40
                  + min(len(danger), 10) / 10.0 * 0.30
                  + crush * 0.30)
@@ -1713,11 +1809,23 @@ async def plan3d(
         points = _fallback_points(best)
 
     n_danger = best["metrics"]["n_danger_zones"]
-    agent_trace = [
+    first_agent = (
+        {"agent": "Scene Editor · Claude", "icon": "claude",
+         "action": "Applied your edits to the 3D scene",
+         "detail": f"{len(layout.get('elements', []))} elements · {n_props} props",
+         "status": "ok"}
+        if refined else
         {"agent": "Vision Surveyor", "icon": "eye",
          "action": "Reconstructed venue from photo",
          "detail": (f"{len(layout.get('elements', []))} elements · "
                     f"{int(round(layout.get('confidence', 0) * 100))}% confidence"),
+         "status": "ok"})
+    agent_trace = [
+        first_agent,
+        {"agent": "Details Agent", "icon": "eye",
+         "action": "Recognizable objects in the 3D scene",
+         "detail": (f"{n_props} props (slides, fountains, benches…)"
+                    if n_props else "no distinctive props"),
          "status": "ok"},
         {"agent": "Scenario Architect", "icon": "plan",
          "action": "Generated layout scenarios",
@@ -1734,17 +1842,124 @@ async def plan3d(
          "status": "ok"},
     ]
 
-    out = {
-        "layout":           layout,
-        "n_people":         final_capacity,
-        "purpose":          purpose,
-        "scenarios":        scenarios,
-        "best_scenario_id": best_id,
-        "plan_points":      points,
-        "plan":             plan_text,
-        "safety_report":    report,
-        "agent_trace":      agent_trace,
+    return {
+        "layout":            layout,
+        "n_people":          final_capacity,
+        "purpose":           purpose,
+        "scenarios":         scenarios,
+        "best_scenario_id":  best_id,
+        "plan_points":       points,
+        "plan":              plan_text,
+        "safety_report":     report,
+        "capacity_estimate": area_est,
+        "agent_trace":       agent_trace,
     }
+
+
+@app.post("/api/plan3d")
+async def plan3d(
+    image:        UploadFile = File(...),
+    purpose:      str   = Form(default="general gathering"),
+    n_people:     int   = Form(default=0),
+    density:      float = Form(default=0.65),
+    duration_min: int   = Form(default=0),
+    seating:      str   = Form(default="standing"),
+    ingress:      str   = Form(default="gradual"),
+    notes:        str   = Form(default=""),
+    area_m2:      float = Form(default=0.0),
+):
+    """
+    Plan-in-3D: photo -> Claude vision reconstruction -> multi-scenario crowd
+    fluid simulation (with world-model crush scoring) -> ranked layouts +
+    field timelines + Claude event-tailored plan.
+
+    Returns:
+      layout            detected VenueLayout (echoed for the 3D reconstruction)
+      n_people          attendance used
+      purpose           event purpose
+      scenarios[]       {id,name,description,layout,metrics,danger_zones,field,
+                         rank,is_best}
+      best_scenario_id  id of the winning scenario
+      plan_points[]     concise recommendation bullets
+      plan              full arrangement plan text
+      safety_report     pre-event safety brief
+      agent_trace       UI agent steps
+    """
+    suffix = Path(image.filename or "").suffix.lower()
+    media_type = _VISION_MEDIA.get(suffix, "image/jpeg")
+
+    raw = await image.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    image_b64 = base64.b64encode(raw).decode()
+
+    cap_hint = n_people if n_people and n_people > 0 else None
+    try:
+        layout = extract_venue_layout(image_b64, media_type, capacity_hint=cap_hint)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Vision layout extraction failed: {exc}")
+
+    # Scene-details agent: spot distinctive objects (slides, swings, fountains,
+    # statues, kiosks...) and add them as visual-only props so the 3D rebuild
+    # looks like the real place. Best-effort — never blocks planning.
+    n_props = 0
+    try:
+        props = extract_scene_props(image_b64, media_type, layout=layout)
+        if props:
+            layout["decor"] = (layout.get("decor") or []) + props
+            n_props = len(props)
+    except Exception:
+        pass
+
+    out = _build_plan3d(
+        layout, purpose=purpose, n_people=n_people, density=density,
+        duration_min=duration_min, seating=seating, ingress=ingress,
+        notes=notes, area_m2=area_m2, n_props=n_props, refined=False)
+    return JSONResponse(_numpy_clean(out))
+
+
+# ── POST /api/plan3d/refine ───────────────────────────────────────────────────
+#
+# Conversational layout editing: the user corrects the reconstructed scene in
+# plain language ("the slide is on the left", "add an exit on the north wall"),
+# Claude rewrites the layout, and we re-run the whole multi-scenario simulation.
+
+class Plan3DRefineRequest(BaseModel):
+    layout:       dict
+    instruction:  str
+    purpose:      str   = "general gathering"
+    n_people:     int   = 0
+    density:      float = 0.65
+    duration_min: int   = 0
+    seating:      str   = "standing"
+    ingress:      str   = "gradual"
+    notes:        str   = ""
+    area_m2:      float = 0.0
+
+
+@app.post("/api/plan3d/refine")
+def plan3d_refine(req: Plan3DRefineRequest):
+    """
+    Edit the 3D scene from a natural-language instruction, then re-simulate.
+    Returns the same shape as /api/plan3d plus `chat_reply` (what changed).
+    """
+    if not req.instruction.strip():
+        raise HTTPException(status_code=400, detail="Empty instruction")
+    if not req.layout or not req.layout.get("elements"):
+        raise HTTPException(status_code=400, detail="No layout to refine")
+
+    try:
+        refined, summary = refine_venue_layout(req.layout, req.instruction.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Scene editor failed: {exc}")
+
+    out = _build_plan3d(
+        refined, purpose=req.purpose, n_people=req.n_people, density=req.density,
+        duration_min=req.duration_min, seating=req.seating, ingress=req.ingress,
+        notes=req.notes, area_m2=req.area_m2,
+        n_props=len(refined.get("decor") or []), refined=True)
+    out["chat_reply"] = summary
     return JSONResponse(_numpy_clean(out))
 
 

@@ -35,6 +35,21 @@ const EL_COLOR: Record<string, string> = {
   barrier: "#A371F7",
 };
 
+// Default palette for scene-detail props when the details agent gives no color.
+const PROP_COLOR: Record<string, string> = {
+  slide: "#E5484D",
+  swing: "#4493F8",
+  playset: "#F2A93B",
+  fountain: "#5BC8E0",
+  statue: "#9aa3b2",
+  bench: "#8a6a45",
+  booth: "#D6409F",
+  goal: "#e7eaf0",
+  pole: "#9aa3b2",
+  planter: "#3b7a47",
+  court: "#2f6f5e",
+};
+
 const relH = (e: VenueLayoutElement) =>
   e.height && e.height > 0 ? e.height : DEFAULT_REL_H[e.type] ?? 0.4;
 const worldH = (e: VenueLayoutElement) => Math.max(0.2, relH(e) * H_MAX);
@@ -265,6 +280,278 @@ function Decor({ layout }: { layout: VenueLayout }) {
                 <meshStandardMaterial color="#2f8f4e" roughness={0.85} />
               </mesh>
             </group>
+          );
+        }
+
+        // ── Scene-detail props (from the details agent) ───────────────────
+        const col = d.color || PROP_COLOR[d.type] || "#9aa3b2";
+        const span = Math.max(w, depth);
+
+        if (d.type === "slide") {
+          // Platform + ladder on one side, inclined chute down the other.
+          const ph = Math.max(0.8, h);
+          const plat = Math.max(0.6, span * 0.5);
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              {/* top platform */}
+              <mesh position={[-plat * 0.5, ph, 0]} castShadow>
+                <boxGeometry args={[plat, 0.16, plat]} />
+                <meshStandardMaterial color={col} roughness={0.5} />
+              </mesh>
+              {/* ladder posts */}
+              {[-1, 1].map((s) => (
+                <mesh key={s} position={[-plat, ph / 2, s * plat * 0.4]} castShadow>
+                  <cylinderGeometry args={[0.07, 0.07, ph, 6]} />
+                  <meshStandardMaterial color="#cfd6e2" roughness={0.6} />
+                </mesh>
+              ))}
+              {/* inclined chute */}
+              <mesh
+                position={[plat * 0.45, ph * 0.5, 0]}
+                rotation={[0, 0, Math.atan2(ph, plat * 1.6)]}
+                castShadow
+              >
+                <boxGeometry args={[Math.hypot(plat * 1.6, ph), 0.12, plat * 0.7]} />
+                <meshStandardMaterial color={col} roughness={0.4} metalness={0.1} />
+              </mesh>
+            </group>
+          );
+        }
+
+        if (d.type === "swing") {
+          const ph = Math.max(0.9, h);
+          const halfW = Math.max(0.7, span * 0.6);
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              {/* two A-frames */}
+              {[-halfW, halfW].map((sx) =>
+                [-1, 1].map((s) => (
+                  <mesh
+                    key={`${sx}-${s}`}
+                    position={[sx, ph / 2, s * 0.3]}
+                    rotation={[s * 0.18, 0, 0]}
+                    castShadow
+                  >
+                    <cylinderGeometry args={[0.06, 0.06, ph * 1.05, 6]} />
+                    <meshStandardMaterial color={col} roughness={0.5} />
+                  </mesh>
+                ))
+              )}
+              {/* top bar */}
+              <mesh position={[0, ph, 0]} rotation={[0, 0, Math.PI / 2]} castShadow>
+                <cylinderGeometry args={[0.06, 0.06, halfW * 2, 6]} />
+                <meshStandardMaterial color={col} roughness={0.5} />
+              </mesh>
+              {/* hanging seats */}
+              {[-halfW * 0.45, halfW * 0.45].map((sx) => (
+                <group key={sx}>
+                  <mesh position={[sx, ph * 0.45, 0]}>
+                    <boxGeometry args={[0.02, ph * 0.5, 0.02]} />
+                    <meshStandardMaterial color="#cfd6e2" />
+                  </mesh>
+                  <mesh position={[sx, ph * 0.22, 0]} castShadow>
+                    <boxGeometry args={[0.28, 0.05, 0.18]} />
+                    <meshStandardMaterial color="#1f2630" />
+                  </mesh>
+                </group>
+              ))}
+            </group>
+          );
+        }
+
+        if (d.type === "playset") {
+          const ph = Math.max(0.9, h);
+          const base = Math.max(0.7, span * 0.55);
+          const legs: [number, number][] = [
+            [-base / 2, -base / 2], [base / 2, -base / 2],
+            [-base / 2, base / 2], [base / 2, base / 2],
+          ];
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              {legs.map(([lx, lz], k) => (
+                <mesh key={k} position={[lx, ph * 0.4, lz]} castShadow>
+                  <cylinderGeometry args={[0.07, 0.07, ph * 0.8, 6]} />
+                  <meshStandardMaterial color="#cfd6e2" roughness={0.6} />
+                </mesh>
+              ))}
+              {/* deck */}
+              <mesh position={[0, ph * 0.8, 0]} castShadow>
+                <boxGeometry args={[base, 0.16, base]} />
+                <meshStandardMaterial color={col} roughness={0.5} />
+              </mesh>
+              {/* pitched roof */}
+              <mesh position={[0, ph * 1.05, 0]} castShadow>
+                <coneGeometry args={[base * 0.8, ph * 0.4, 4]} />
+                <meshStandardMaterial color="#E5484D" roughness={0.6} />
+              </mesh>
+              {/* little slide off the deck */}
+              <mesh
+                position={[base * 0.6, ph * 0.42, 0]}
+                rotation={[0, 0, Math.atan2(ph * 0.8, base)]}
+                castShadow
+              >
+                <boxGeometry args={[Math.hypot(base, ph * 0.8), 0.1, base * 0.5]} />
+                <meshStandardMaterial color="#F2A93B" roughness={0.45} />
+              </mesh>
+            </group>
+          );
+        }
+
+        if (d.type === "fountain") {
+          const r = Math.max(0.6, span * 0.55);
+          const ph = Math.max(0.35, h * 0.5);
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              {/* basin rim */}
+              <mesh position={[0, ph * 0.5, 0]} castShadow receiveShadow>
+                <cylinderGeometry args={[r, r, ph, 24]} />
+                <meshStandardMaterial color={col} roughness={0.6} />
+              </mesh>
+              {/* water surface */}
+              <mesh position={[0, ph * 0.92, 0]}>
+                <cylinderGeometry args={[r * 0.86, r * 0.86, 0.06, 24]} />
+                <meshStandardMaterial
+                  color="#7fd8ec"
+                  emissive="#2DD4BF"
+                  emissiveIntensity={0.35}
+                  roughness={0.2}
+                />
+              </mesh>
+              {/* central jet */}
+              <mesh position={[0, ph * 1.4, 0]}>
+                <cylinderGeometry args={[0.06, 0.1, ph * 1.0, 10]} />
+                <meshBasicMaterial color="#bdeefb" toneMapped={false} />
+              </mesh>
+            </group>
+          );
+        }
+
+        if (d.type === "statue") {
+          const ph = Math.max(0.7, h);
+          const r = Math.max(0.3, span * 0.3);
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              {/* pedestal */}
+              <mesh position={[0, ph * 0.2, 0]} castShadow>
+                <boxGeometry args={[r * 2.2, ph * 0.4, r * 2.2]} />
+                <meshStandardMaterial color="#6b7280" roughness={0.7} />
+              </mesh>
+              {/* figure (body + head) */}
+              <mesh position={[0, ph * 0.7, 0]} castShadow>
+                <capsuleGeometry args={[r * 0.7, ph * 0.5, 6, 12]} />
+                <meshStandardMaterial color={col} roughness={0.5} metalness={0.3} />
+              </mesh>
+              <mesh position={[0, ph * 1.05, 0]} castShadow>
+                <sphereGeometry args={[r * 0.55, 14, 12]} />
+                <meshStandardMaterial color={col} roughness={0.5} metalness={0.3} />
+              </mesh>
+            </group>
+          );
+        }
+
+        if (d.type === "bench") {
+          const ph = Math.max(0.3, h);
+          const len = Math.max(0.8, span);
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              {/* seat */}
+              <mesh position={[0, ph * 0.5, 0]} castShadow>
+                <boxGeometry args={[len, 0.1, len * 0.32]} />
+                <meshStandardMaterial color={col} roughness={0.7} />
+              </mesh>
+              {/* backrest */}
+              <mesh position={[0, ph * 0.85, -len * 0.14]} castShadow>
+                <boxGeometry args={[len, ph * 0.6, 0.08]} />
+                <meshStandardMaterial color={col} roughness={0.7} />
+              </mesh>
+            </group>
+          );
+        }
+
+        if (d.type === "booth") {
+          const ph = Math.max(0.7, h);
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              <mesh position={[0, ph * 0.45, 0]} castShadow receiveShadow>
+                <boxGeometry args={[w, ph * 0.9, depth]} />
+                <meshStandardMaterial color="#e7eaf0" roughness={0.7} />
+              </mesh>
+              {/* striped canopy */}
+              <mesh position={[0, ph * 0.96, depth * 0.18]} rotation={[0.18, 0, 0]} castShadow>
+                <boxGeometry args={[w * 1.18, 0.08, depth * 0.75]} />
+                <meshStandardMaterial color={col} roughness={0.5} />
+              </mesh>
+            </group>
+          );
+        }
+
+        if (d.type === "goal") {
+          const ph = Math.max(0.7, h);
+          const halfW = Math.max(0.6, span * 0.7);
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              {[-halfW, halfW].map((sx) => (
+                <mesh key={sx} position={[sx, ph / 2, 0]} castShadow>
+                  <cylinderGeometry args={[0.06, 0.06, ph, 8]} />
+                  <meshStandardMaterial color={col} roughness={0.4} />
+                </mesh>
+              ))}
+              <mesh position={[0, ph, 0]} rotation={[0, 0, Math.PI / 2]} castShadow>
+                <cylinderGeometry args={[0.06, 0.06, halfW * 2, 8]} />
+                <meshStandardMaterial color={col} roughness={0.4} />
+              </mesh>
+            </group>
+          );
+        }
+
+        if (d.type === "pole") {
+          const ph = Math.max(1.0, h);
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              <mesh position={[0, ph / 2, 0]} castShadow>
+                <cylinderGeometry args={[0.05, 0.07, ph, 8]} />
+                <meshStandardMaterial color={col} roughness={0.5} metalness={0.3} />
+              </mesh>
+              {/* flag */}
+              <mesh position={[0.28, ph * 0.85, 0]}>
+                <boxGeometry args={[0.5, ph * 0.22, 0.02]} />
+                <meshStandardMaterial color="#E5484D" roughness={0.6} side={THREE.DoubleSide} />
+              </mesh>
+            </group>
+          );
+        }
+
+        if (d.type === "planter") {
+          const ph = Math.max(0.25, h * 0.5);
+          return (
+            <group key={`d${i}`} position={[cx, 0, cz]}>
+              <mesh position={[0, ph * 0.5, 0]} castShadow receiveShadow>
+                <boxGeometry args={[w, ph, depth]} />
+                <meshStandardMaterial color="#7a5a3a" roughness={0.85} />
+              </mesh>
+              {/* bushes */}
+              {[-0.25, 0.05, 0.3].map((ox, k) => (
+                <mesh key={k} position={[ox * w, ph + 0.18, 0]} castShadow>
+                  <sphereGeometry args={[Math.max(0.18, w * 0.22), 10, 8]} />
+                  <meshStandardMaterial color={col} roughness={0.85} />
+                </mesh>
+              ))}
+            </group>
+          );
+        }
+
+        if (d.type === "court") {
+          // Flat colored ground patch (sport court, sandbox, splash pad).
+          return (
+            <mesh
+              key={`d${i}`}
+              position={[cx, 0.03, cz]}
+              rotation={[-Math.PI / 2, 0, 0]}
+              receiveShadow
+            >
+              <planeGeometry args={[w, depth]} />
+              <meshStandardMaterial color={col} roughness={0.9} transparent opacity={0.92} />
+            </mesh>
           );
         }
 

@@ -1,5 +1,6 @@
 uagents
 requests
 playwright
+yt-dlp
 opencv-python-headless
 numpy<2

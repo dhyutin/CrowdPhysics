@@ -31,6 +31,7 @@ AGENT 2 — CalibrationAgent
 import anthropic
 import json
 import os
+import re
 import numpy as np
 
 # ─── CLIENT ───────────────────────────────────────────────────────────────────
@@ -630,6 +631,270 @@ def _sanitize_layout(layout, capacity_hint=None):
         "elements": clean_elements,
         "decor": clean_decor,
     }
+
+
+# ─── ROLE 7b: SCENE DETAILS AGENT ─────────────────────────────────────────────
+
+# Distinctive, recognizable physical objects the details agent can place. These
+# are VISUAL-ONLY props (rendered in 3D, never simulated) that make the rebuilt
+# environment look like the real place — e.g. a playground slide, swings, a
+# fountain. They are emitted in the same decor schema the renderer already eats,
+# plus an optional `color` hint.
+_PROP_TYPES = {
+    "slide", "swing", "playset", "fountain", "statue", "bench", "booth",
+    "goal", "pole", "planter", "court", "tree", "tent", "screen", "tower",
+    "roof",
+}
+
+
+def extract_scene_props(image_b64, media_type="image/jpeg", layout=None):
+    """
+    Scene-details agent: a focused second vision pass that finds the distinctive,
+    recognizable objects in the image (playground slides, swings, fountains,
+    statues, benches, kiosks, sport goals, flag poles, planters, courts...) and
+    returns them as visual-only props so the 3D reconstruction looks like the
+    real place — not just bare walls and a stage.
+
+    Runs AFTER extract_venue_layout() and is given the already-detected layout so
+    it can place props in the right spots and avoid duplicating structures.
+
+    Args:
+        image_b64:  base64-encoded image bytes (no data: prefix)
+        media_type: image/jpeg | image/png | image/webp | image/gif
+        layout:     dict from extract_venue_layout() (for spatial context)
+
+    Returns:
+        list[dict] of props: {type, x, y, w, h, height, color, label}
+        Coordinates normalized 0-1, origin top-left (same frame as the layout).
+        Returns [] on any failure — purely additive, never blocks planning.
+    """
+    ctx = ""
+    if layout:
+        ctx = ("\nAlready-detected layout (do NOT repeat walls/stage/gates; place "
+               "props in the open areas between them):\n"
+               + json.dumps({"name": layout.get("name"),
+                             "archetype": layout.get("archetype"),
+                             "elements": layout.get("elements", [])}, indent=2))
+
+    try:
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=900,
+            system=(
+                "You are a scene-details agent for a 3D reconstruction. You spot "
+                "the distinctive, recognizable OBJECTS in a venue photo — the "
+                "things that make someone say 'that's a playground' or 'that's a "
+                "plaza' — and you place them as small props on a top-down plan. "
+                "You do NOT re-describe walls, the stage, entries or exits. "
+                "Output ONLY valid JSON."
+            ),
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image",
+                     "source": {"type": "base64", "media_type": media_type,
+                                "data": image_b64}},
+                    {"type": "text",
+                     "text": f"""Find the distinctive physical objects in this venue and place them.{ctx}
+
+Coordinate system: normalized 0-1, origin TOP-LEFT, x = right, y = down.
+Each prop is a rectangle footprint: x,y = top-left corner, w,h = size (all 0-1).
+
+Use these prop types EXACTLY (pick the closest match):
+  "slide"    — playground slide
+  "swing"    — swing set
+  "playset"  — jungle gym / climbing/play structure
+  "fountain" — water fountain / round basin
+  "statue"   — statue / monument / sculpture
+  "bench"    — bench / seating
+  "booth"    — kiosk / stall / food booth / small hut
+  "goal"     — sports goal (soccer/hockey)
+  "pole"     — flag pole / lamp post / sign post
+  "planter"  — planter bed / bush / hedge / flower bed
+  "court"    — flat ground patch (sport court, sandbox, splash pad)
+  "tree"     — tree / large greenery
+  "tent"     — marquee / canopy tent
+  "screen"   — LED screen / scoreboard
+  "tower"    — light / speaker tower
+
+For EACH prop give:
+  "height" — relative height 0-1 (0.04 flat court, 0.15 bench, 0.3 slide/swing,
+             0.5 statue/booth, 0.8 tall pole)
+  "color"  — a hex color that matches what you see (e.g. "#E5484D" red slide);
+             omit or "" if unsure.
+  "label"  — 1-3 word name (e.g. "RED SLIDE", "FOUNTAIN").
+
+Rules:
+- Only include objects you can actually see. 0-12 props. Quality over quantity.
+- Keep footprints small and plausible (most props w,h ≤ 0.15).
+- If the scene is bare (e.g. an empty hall or field), return an empty list.
+
+Output ONLY this JSON (no markdown):
+{{"props": [
+  {{"type": "slide", "x": 0.4, "y": 0.55, "w": 0.08, "h": 0.10, "height": 0.3, "color": "#E5484D", "label": "SLIDE"}}
+]}}"""},
+                ],
+            }],
+        )
+    except Exception:
+        return []
+
+    raw = resp.content[0].text.strip()
+    if "```" in raw:
+        for part in raw.split("```"):
+            cand = part.strip()
+            if cand.startswith("json"):
+                cand = cand[4:].strip()
+            if cand.startswith("{"):
+                raw = cand
+                break
+
+    try:
+        data = json.loads(raw.strip())
+    except json.JSONDecodeError:
+        return []
+
+    return _sanitize_props(data.get("props") or data.get("decor") or [])
+
+
+def _sanitize_props(props):
+    """Clamp/validate details-agent props into the decor schema the UI renders."""
+    def clamp01(v, default=0.0):
+        try:
+            return max(0.0, min(1.0, float(v)))
+        except (TypeError, ValueError):
+            return default
+
+    HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+    clean = []
+    for p in props[:12]:
+        ptype = str(p.get("type", "")).lower().strip()
+        if ptype not in _PROP_TYPES:
+            continue
+        x = clamp01(p.get("x"))
+        y = clamp01(p.get("y"))
+        w = clamp01(p.get("w"), 0.06) or 0.06
+        h = clamp01(p.get("h"), 0.06) or 0.06
+        w = min(w, 1.0 - x)
+        h = min(h, 1.0 - y)
+        if w <= 0.0 or h <= 0.0:
+            continue
+        try:
+            ph = float(p.get("height"))
+        except (TypeError, ValueError):
+            ph = 0.3
+        color = str(p.get("color", "")).strip()
+        if not HEX.match(color):
+            color = ""
+        clean.append({
+            "type": ptype,
+            "x": round(x, 3), "y": round(y, 3),
+            "w": round(w, 3), "h": round(h, 3),
+            "height": round(max(0.02, min(1.0, ph)), 3),
+            "color": color,
+            "label": str(p.get("label", ""))[:24],
+        })
+    return clean
+
+
+# ─── ROLE 7c: CONVERSATIONAL SCENE EDITOR ─────────────────────────────────────
+
+def refine_venue_layout(layout, instruction, image_b64=None,
+                        media_type="image/jpeg"):
+    """
+    Conversational 3D-scene editor. Given the current reconstructed layout and a
+    plain-language correction ("the slide is on the left", "add an exit on the
+    north wall", "remove the stage", "make the hall wider", "the fountain should
+    be bigger"), return the UPDATED layout in the same schema plus a one-line
+    summary of what changed.
+
+    Args:
+        layout:      current layout dict {elements, decor, name, archetype, ...}
+        instruction: the user's natural-language change
+        image_b64:   optional original image for visual grounding (not required)
+        media_type:  image media type if image_b64 is given
+
+    Returns:
+        (layout_dict, summary_str). On failure returns (layout, message) so the
+        caller can keep the old layout and surface the message in chat.
+    """
+    cur = {
+        "name":      layout.get("name", "Venue"),
+        "archetype": layout.get("archetype", "hall"),
+        "elements":  layout.get("elements", []),
+        "decor":     layout.get("decor", []),
+    }
+
+    content = []
+    if image_b64:
+        content.append({"type": "image", "source": {
+            "type": "base64", "media_type": media_type, "data": image_b64}})
+    content.append({"type": "text", "text": f"""You are editing a top-down venue layout for a crowd simulator. Apply the user's change and return the FULL updated layout.
+
+CURRENT LAYOUT (normalized 0-1 coords, origin TOP-LEFT, x=right, y=down):
+{json.dumps(cur, indent=2)}
+
+USER REQUEST: "{instruction}"
+
+Rules:
+- Apply ONLY what the user asked; keep every other element/prop identical.
+- Keep the 4 perimeter walls and at least one entry + one gate unless the user explicitly removes them.
+- Structural element types: "stage" | "wall" | "barrier" | "entry" | "gate".
+  Each: {{type,x,y,w,h,height(0-1),shape,label}}; shape ∈ box|cylinder|tiered|dome|ramp|canopy.
+- Visual prop types (decor): slide|swing|playset|fountain|statue|bench|booth|goal|pole|planter|court|tree|tent|screen|tower|roof.
+  Each: {{type,x,y,w,h,height,color(hex),label}}.
+- Positions/sizes stay within 0-1 and physically plausible.
+
+Output ONLY this JSON (no markdown):
+{{"summary": "one short sentence on what you changed",
+  "name": "{cur['name']}",
+  "archetype": "{cur['archetype']}",
+  "elements": [ ... full updated list ... ],
+  "decor": [ ... full updated list ... ]}}"""})
+
+    try:
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1600,
+            system=("You are a precise 3D scene editor. You modify a structured "
+                    "venue layout to match a user's instruction and return valid "
+                    "JSON only — never prose outside the JSON."),
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception as exc:
+        return layout, f"Couldn't reach the editor agent: {exc}"
+
+    raw = resp.content[0].text.strip()
+    if "```" in raw:
+        for part in raw.split("```"):
+            cand = part.strip()
+            if cand.startswith("json"):
+                cand = cand[4:].strip()
+            if cand.startswith("{"):
+                raw = cand
+                break
+
+    try:
+        data = json.loads(raw.strip())
+    except json.JSONDecodeError:
+        return layout, "I couldn't parse that change — try rephrasing it."
+
+    summary = str(data.get("summary", "")).strip()[:200] or "Updated the layout."
+    merged = {
+        "name":       data.get("name", layout.get("name", "Venue")),
+        "capacity":   layout.get("capacity"),
+        "view":       layout.get("view", "edited"),
+        "archetype":  data.get("archetype", layout.get("archetype", "hall")),
+        "confidence": layout.get("confidence", 0.0),
+        "notes":      data.get("notes", layout.get("notes", "")),
+        "elements":   data.get("elements", layout.get("elements", [])),
+        "decor":      data.get("decor", layout.get("decor", [])),
+    }
+    refined = _sanitize_layout(merged, layout.get("capacity"))
+    # Decor carries the richer prop set, so sanitize it with the prop validator
+    # (which is a superset of the plain decor types).
+    refined["decor"] = _sanitize_props(merged.get("decor") or [])
+    return refined, summary
 
 
 # ─── AGENT 1: VENUE AGENT ────────────────────────────────────────────────────

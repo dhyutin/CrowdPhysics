@@ -10,4 +10,5 @@ opencv-python-headless
 numpy<2
 Pillow
 playwright
+yt-dlp
 requests

@@ -184,6 +184,24 @@ export async function streamMonitorUrl(
   await consumeStream(res, onEvent);
 }
 
+// Direct YouTube ingest (yt-dlp + ffmpeg on the backend) — no Browserbase,
+// much lower latency. Same NDJSON event stream as the other live monitors.
+export async function streamMonitorYouTube(
+  url: string,
+  venue: string,
+  onEvent: (ev: LiveTick) => void,
+  nFrames = 40,
+  signal?: AbortSignal
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/monitor_youtube_stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, venue, n_frames: nFrames }),
+    signal,
+  });
+  await consumeStream(res, onEvent);
+}
+
 export async function runSimulation(
   payload: SimulatePayload
 ): Promise<SimulateResult> {
@@ -237,6 +255,7 @@ export interface EventIntake {
   seating: string;
   ingress: string;
   notes: string;
+  areaM2?: number;
 }
 
 export async function plan3d(
@@ -252,7 +271,34 @@ export async function plan3d(
   form.append("seating", intake.seating);
   form.append("ingress", intake.ingress);
   form.append("notes", intake.notes);
+  form.append("area_m2", String(intake.areaM2 ?? 0));
   const res = await fetch(`${BASE}/api/plan3d`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// Conversationally edit the reconstructed scene, then re-simulate.
+export async function refinePlan3d(
+  layout: VenueLayout,
+  instruction: string,
+  intake: EventIntake
+): Promise<Plan3DResult> {
+  const res = await fetch(`${BASE}/api/plan3d/refine`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      layout,
+      instruction,
+      purpose: intake.purpose,
+      n_people: intake.nPeople,
+      density: intake.density,
+      duration_min: intake.durationMin,
+      seating: intake.seating,
+      ingress: intake.ingress,
+      notes: intake.notes,
+      area_m2: intake.areaM2 ?? 0,
+    }),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -406,7 +452,12 @@ export type VenueArchetype =
   | "stadium" | "arena" | "theater" | "hall"
   | "plaza" | "street" | "field" | "festival";
 
-export type DecorType = "screen" | "tower" | "tent" | "tree" | "roof";
+export type DecorType =
+  // event-venue decor
+  | "screen" | "tower" | "tent" | "tree" | "roof"
+  // distinctive scene-detail props (from the details agent)
+  | "slide" | "swing" | "playset" | "fountain" | "statue"
+  | "bench" | "booth" | "goal" | "pole" | "planter" | "court";
 
 export interface DecorProp {
   type: DecorType;
@@ -415,6 +466,7 @@ export interface DecorProp {
   w: number;
   h: number;
   height?: number;
+  color?: string; // optional hex hint from the details agent
   label?: string;
 }
 
@@ -481,6 +533,14 @@ export interface Scenario {
   is_best: boolean;
 }
 
+export interface CapacityEstimate {
+  area_m2: number;
+  people_per_m2: number;
+  usable_fraction: number;
+  seating: string;
+  max_capacity: number;
+}
+
 export interface Plan3DResult {
   layout: VenueLayout;
   n_people: number;
@@ -491,6 +551,8 @@ export interface Plan3DResult {
   plan: string;
   safety_report: string;
   agent_trace: AgentTraceStep[];
+  capacity_estimate?: CapacityEstimate | null;
+  chat_reply?: string; // present on /api/plan3d/refine responses
 }
 
 export interface DiscoverUnknown {

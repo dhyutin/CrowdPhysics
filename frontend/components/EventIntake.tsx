@@ -8,6 +8,23 @@ export interface IntakeValue {
   seating: string;
   ingress: string;
   notes: string;
+  areaM2: string;
+}
+
+// Mirrors backend _capacity_from_area() so the UI can preview the estimate.
+export function estimateCapacity(
+  areaM2: number,
+  seating: string,
+  densityPct: number
+): { perM2: number; capacity: number } | null {
+  if (!areaM2 || areaM2 <= 0) return null;
+  const d = Math.max(0, Math.min(1, (densityPct || 0) / 100));
+  const usable = 0.78;
+  const perM2 =
+    seating === "seated" ? 1.0 + d * 0.5 :
+    seating === "mixed"  ? 1.5 + d * 1.5 :
+                           2.0 + d * 2.0;
+  return { perM2: Math.round(perM2 * 100) / 100, capacity: Math.max(1, Math.round(areaM2 * usable * perM2)) };
 }
 
 const PURPOSES = [
@@ -93,6 +110,41 @@ export default function EventIntake({
           placeholder="auto-estimate"
           inputMode="numeric"
         />
+      </div>
+
+      <div>
+        <label className="field-label">Usable area (m²)</label>
+        <input
+          className="input text-sm"
+          value={value.areaM2}
+          onChange={(e) => onChange({ areaM2: e.target.value })}
+          placeholder="e.g. 1200"
+          inputMode="numeric"
+        />
+        {(() => {
+          const est = estimateCapacity(
+            parseFloat(value.areaM2) || 0,
+            value.seating,
+            parseInt(value.density) || 65
+          );
+          if (!est) {
+            return (
+              <p className="font-mono text-[9px] text-text3 mt-1 leading-snug">
+                Enter the floor area and we’ll estimate max capacity (used when
+                “people” is left blank).
+              </p>
+            );
+          }
+          return (
+            <p className="font-mono text-[9px] text-text2 mt-1 leading-snug">
+              ≈ <span className="text-lavender">{est.capacity.toLocaleString()}</span> max
+              {" "}({est.perM2}/m² · {value.seating})
+              {!value.nPeople && (
+                <span className="text-text3"> — used as the crowd size</span>
+              )}
+            </p>
+          );
+        })()}
       </div>
 
       <div>

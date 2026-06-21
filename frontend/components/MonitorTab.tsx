@@ -4,12 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   streamAnalyze,
   streamMonitorUrl,
+  streamMonitorYouTube,
   startLiveSession,
   endLiveSession,
   type MonitorResult,
   type TimelinePoint,
   type Forecast,
-  type Trend,
   type Hotspot,
   type CaptureSource,
   type LiveTick,
@@ -19,13 +19,16 @@ import {
 } from "@/lib/api";
 import AgentTrace from "@/components/AgentTrace";
 import ForecastPanel from "@/components/ForecastPanel";
-import TrendPanel from "@/components/TrendPanel";
 import FilmPlayer, { type FilmFrame } from "@/components/FilmPlayer";
 import InterventionImpact from "@/components/InterventionImpact";
 
-// After this many consecutive failed session re-provisions, stop monitoring
-// and surface a clear message instead of reconnecting endlessly.
-const MAX_RECONNECTS = 5;
+// Extract an 11-char YouTube video id from any common link shape. When set, the
+// Monitor uses the direct YouTube ingest (no Browserbase) and embeds the player.
+function youtubeId(url: string): string | null {
+  const m = url.match(
+    /(?:[?&]v=|youtu\.be\/|\/live\/|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
   SAFE:        { badge: "badge-safe",    dot: "dot-live",    label: "Safe" },
@@ -156,7 +159,6 @@ export default function MonitorTab() {
   const [streaming, setStreaming]   = useState(false);
   const [liveTicks, setLiveTicks]   = useState<TimelinePoint[]>([]);
   const [liveForecast, setLiveForecast] = useState<Forecast | null>(null);
-  const [liveTrend, setLiveTrend]   = useState<Trend | null>(null);
   const [liveHotspot, setLiveHotspot] = useState<Hotspot | null>(null);
   const [liveFrame, setLiveFrame]   = useState<string | null>(null);
   const [film, setFilm]             = useState<FilmFrame[]>([]);
@@ -172,8 +174,9 @@ export default function MonitorTab() {
   // Self-healing live loop bookkeeping.
   const [reconnecting, setReconnecting] = useState(false);
   const failCountRef = useRef(0);
-  // Consecutive full session re-provisions; bounded by MAX_RECONNECTS so a
-  // genuinely uncapturable feed stops cleanly instead of reconnecting forever.
+  // Running count of session re-provisions, shown in the reconnecting label.
+  // Monitoring never auto-stops — it keeps retrying (with capped backoff) until
+  // the user hits Stop.
   const reconnectAttemptsRef = useRef(0);
   const lastTickRef = useRef<number>(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -199,6 +202,13 @@ export default function MonitorTab() {
 
   const canRun = mode === "upload" ? !!file : liveUrl.trim().length > 0;
 
+  // YouTube links take the direct-ingest path (no Browserbase session).
+  const ytId = useMemo(() => youtubeId(liveUrl.trim()), [liveUrl]);
+  const isYouTube = mode === "live" && !!ytId;
+  // "Live ready" gate for the monitoring loop: Browserbase needs a warm
+  // session; YouTube ingest needs none.
+  const liveReady = isYouTube || !!liveSession;
+
   async function startPreview() {
     const u = liveUrl.trim();
     if (!u) return;
@@ -210,7 +220,6 @@ export default function MonitorTab() {
     setResult(null);
     setLiveTicks([]);
     setLiveForecast(null);
-    setLiveTrend(null);
     setLiveHotspot(null);
     setLiveFrame(null);
     setFilm([]);
@@ -221,6 +230,18 @@ export default function MonitorTab() {
     failCountRef.current = 0;
     reconnectAttemptsRef.current = 0;
     setPreviewErr(null);
+
+    // YouTube → no Browserbase. Embed the player directly and let the loop
+    // pull frames via the backend's direct yt-dlp ingest.
+    const vid = youtubeId(u);
+    if (vid) {
+      setLiveView(
+        `https://www.youtube.com/embed/${vid}?autoplay=1&mute=1&playsinline=1`);
+      setLiveSession(null);
+      setMonitoring(true);
+      return;
+    }
+
     setPreviewLoading(true);
     try {
       const s = await startLiveSession(u);
@@ -276,7 +297,6 @@ export default function MonitorTab() {
       setResult(null);
       setLiveTicks([]);
       setLiveForecast(null);
-      setLiveTrend(null);
       setLiveHotspot(null);
       setLiveFrame(null);
       setFilm([]);
@@ -331,7 +351,6 @@ export default function MonitorTab() {
           setLiveStatus(pt.status);
           setLiveScore(pt.score);
           if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
-          if (ev.trend) setLiveTrend(ev.trend);
           if (ev.hotspot) setLiveHotspot(ev.hotspot);
           if (ev.frame_b64) setLiveFrame(ev.frame_b64);
           // Pair the real frame with its pressure field for slow sync replay.
@@ -378,7 +397,6 @@ export default function MonitorTab() {
             source: capturedSource,
           });
           if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
-          if (ev.trend) setLiveTrend(ev.trend);
           if (ev.hotspot) setLiveHotspot(ev.hotspot);
           if (ev.counterfactual && !ev.counterfactual.error)
             setCounterfactual(ev.counterfactual);
@@ -395,6 +413,10 @@ export default function MonitorTab() {
     try {
       if (mode === "upload") {
         await streamAnalyze(file!, venue, onEvent, ac.signal);
+      } else if (isYouTube) {
+        // Direct YouTube ingest — no Browserbase, low latency.
+        await streamMonitorYouTube(
+          liveUrl.trim(), venue || "YouTube Live", onEvent, 40, ac.signal);
       } else {
         // keepSession=true keeps the warm Browserbase session alive so the
         // live-view iframe never goes dark and the next loop reuses it.
@@ -428,7 +450,7 @@ export default function MonitorTab() {
   handleRunRef.current = handleRun;
   const reprovisionRef = useRef(false);
   useEffect(() => {
-    if (mode !== "live" || !monitoring || streaming || !liveSession) return;
+    if (mode !== "live" || !monitoring || streaming || !liveReady) return;
 
     const failed = !!error;
     const fails = failCountRef.current;
@@ -446,27 +468,26 @@ export default function MonitorTab() {
     const id = setTimeout(async () => {
       if (cancelled || streaming) return;
 
+      // YouTube ingest has no Browserbase session to rebuild — just retry the
+      // direct pull. Monitoring is continuous: we never give up on our own, we
+      // only back off (capped at 30s) and keep trying until the user stops.
+      if (failed && isYouTube && sessionLikelyDead) {
+        reconnectAttemptsRef.current += 1;
+        setError(null);
+        setReconnecting(false);
+        handleRunRef.current();
+        return;
+      }
+
       if (failed && sessionLikelyDead && !reprovisionRef.current) {
-        // Bound reconnects: a feed that can't be captured (bad URL, no video,
-        // page needs interaction) will never recover by reconnecting — so stop
-        // cleanly with a clear message instead of looping forever.
-        if (reconnectAttemptsRef.current >= MAX_RECONNECTS) {
-          setMonitoring(false);
-          setReconnecting(false);
-          setLivePhase("Disconnected");
-          setError(
-            "Couldn't hold a live connection after several attempts. " +
-            "Check the stream URL and that the page actually shows live video, " +
-            "then start the monitor again.");
-          return;
-        }
         // Re-provision a fresh cloud browser, then let the liveSession change
-        // re-trigger this effect to run the next pass cleanly.
+        // re-trigger this effect to run the next pass cleanly. We keep doing
+        // this for as long as monitoring is on (capped backoff between tries)
+        // so the feed reconnects continuously until the user hits Stop.
         reprovisionRef.current = true;
         reconnectAttemptsRef.current += 1;
         setReconnecting(true);
-        setLivePhase(
-          `Reconnecting… (${reconnectAttemptsRef.current}/${MAX_RECONNECTS})`);
+        setLivePhase(`Reconnecting… (attempt ${reconnectAttemptsRef.current})`);
         try {
           if (liveSession) endLiveSession(liveSession);
           const s = await startLiveSession(liveUrl.trim());
@@ -493,7 +514,7 @@ export default function MonitorTab() {
     }, delay);
 
     return () => { cancelled = true; clearTimeout(id); };
-  }, [mode, monitoring, streaming, liveSession, error, liveUrl]);
+  }, [mode, monitoring, streaming, liveSession, liveReady, isYouTube, error, liveUrl]);
 
   // Heartbeat watchdog: if a streaming pass goes quiet for too long the feed has
   // likely stalled. Abort it and flag an error so the self-healing loop recovers
@@ -547,20 +568,15 @@ export default function MonitorTab() {
       },
     ];
     if (liveForecast?.points?.length) {
+      const horizonLabel =
+        (liveForecast.horizon_s ?? 0) >= 90
+          ? `${Math.round((liveForecast.horizon_s ?? 0) / 60)} min`
+          : `${liveForecast.horizon_s ?? ""}s`;
       steps.push({
-        agent: "Forecast Agent", icon: "forecast",
-        action: `Imagined next ${liveForecast.horizon_s ?? ""}s`,
+        agent: "Projection Agent", icon: "forecast",
+        action: `Simulated next ${horizonLabel}`,
         detail: `peak risk ${Math.round(liveForecast.projected_risk ?? 0)}%`,
         status: liveForecast.projected_status === "DANGER" ? "danger" : "ok",
-      });
-    }
-    if (liveTrend?.points?.length) {
-      const sl = liveTrend.slope_per_min ?? 0;
-      steps.push({
-        agent: "Trend Projection", icon: "eye",
-        action: "Minutes-ahead risk outlook",
-        detail: `${sl > 0 ? "+" : ""}${sl}%/min trend`,
-        status: liveTrend.projected_status === "DANGER" ? "danger" : "ok",
       });
     }
     steps.push({
@@ -570,7 +586,7 @@ export default function MonitorTab() {
     });
     return steps;
   }, [streaming, monitoring, liveStatus, liveScore, liveTicks.length,
-      liveForecast, liveTrend]);
+      liveForecast]);
 
   return (
     <div className="flex h-full gap-0 min-h-0">
@@ -661,10 +677,21 @@ export default function MonitorTab() {
                 </button>
               )}
               <p className="font-mono text-[9px] text-text3 leading-snug">
-                Opens a Browserbase cloud browser and{" "}
-                <span className="text-teal">analyzes automatically</span> as soon
-                as the feed is live — then keeps monitoring on a loop. No clicks
-                needed.
+                {isYouTube ? (
+                  <>
+                    <span className="text-teal">YouTube detected</span> — uses
+                    direct low-latency ingest (no Browserbase) and{" "}
+                    <span className="text-teal">analyzes automatically</span> on
+                    a loop.
+                  </>
+                ) : (
+                  <>
+                    Opens a Browserbase cloud browser and{" "}
+                    <span className="text-teal">analyzes automatically</span> as
+                    soon as the feed is live — then keeps monitoring on a loop.
+                    No clicks needed.
+                  </>
+                )}
               </p>
             </div>
           )}
@@ -759,8 +786,8 @@ export default function MonitorTab() {
               src={liveView}
               title="Live camera feed"
               className="w-full h-full border-0 animate-fade-in"
-              sandbox="allow-same-origin allow-scripts"
-              allow="clipboard-read; clipboard-write"
+              sandbox="allow-same-origin allow-scripts allow-presentation allow-popups"
+              allow="autoplay; encrypted-media; picture-in-picture; clipboard-read; clipboard-write"
             />
           ) : result?.source ? (
             <div className="flex flex-col items-center gap-3 text-text3">
@@ -793,8 +820,9 @@ export default function MonitorTab() {
         </div>
         {mode === "live" && (
           <p className="font-mono text-[9px] text-text3 leading-snug">
-            Live view streams the actual Browserbase cloud browser — the same
-            session the physics pipeline analyzes.
+            {isYouTube
+              ? "Embedded YouTube player. Frames are pulled directly from the stream (yt-dlp) — no cloud browser, lower latency."
+              : "Live view streams the actual Browserbase cloud browser — the same session the physics pipeline analyzes."}
           </p>
         )}
       </div>
@@ -1054,14 +1082,6 @@ export default function MonitorTab() {
             {(() => {
               const cf = result?.counterfactual ?? counterfactual;
               return cf && !cf.error ? <InterventionImpact cf={cf} /> : null;
-            })()}
-
-            {/* Minutes-ahead risk outlook (statistical trend projection) */}
-            {(() => {
-              const tr = result?.trend ?? liveTrend;
-              return tr && tr.points && tr.points.length > 1 ? (
-                <TrendPanel trend={tr} />
-              ) : null;
             })()}
 
             {/* Timeline — grows bar-by-bar while streaming */}
