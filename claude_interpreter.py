@@ -1047,6 +1047,99 @@ Fractions across behaviors should sum to ~1."""
     return _behaviors_from_layout(layout)
 
 
+# ─── ROLE 7e: RECONSTRUCTION FIDELITY EVALUATOR (Arize-traced) ────────────────
+
+def evaluate_reconstruction(image_b64, layout, media_type="image/jpeg"):
+    """
+    LLM-as-judge evaluation: how faithfully does the reconstructed world-model
+    layout match the source photo? Claude sees the original image and the
+    top-down reconstruction and scores fidelity 0-1 across a few aspects.
+
+    The underlying Claude call is auto-traced to Arize; the caller wraps this in
+    an evaluation span so the score/label show up as an Arize evaluation.
+
+    Returns {score, label, rationale, aspects:{structures,openings,scale,features}}
+    or None on failure.
+    """
+    compact = {
+        "name":      layout.get("name"),
+        "archetype": layout.get("archetype"),
+        "elements":  [
+            {"type": e.get("type"), "label": e.get("label", ""),
+             "x": e.get("x"), "y": e.get("y"), "w": e.get("w"), "h": e.get("h")}
+            for e in (layout.get("elements", []) or [])
+        ][:30],
+        "decor":     [
+            {"type": d.get("type"), "label": d.get("label", "")}
+            for d in (layout.get("decor", []) or [])
+        ][:20],
+    }
+    content = [
+        {"type": "image", "source": {
+            "type": "base64", "media_type": media_type, "data": image_b64}},
+        {"type": "text", "text": f"""You are evaluating whether an AI's 3D reconstruction matches the REAL place in the photo.
+
+The reconstruction is a top-down layout of labeled rectangles (normalized 0-1, origin top-left) plus visual props:
+{json.dumps(compact, indent=2)}
+
+Judge how faithfully this captures the actual space in the image. Consider:
+- structures: are the major built elements (stage/walls/stands/barriers) present and roughly right?
+- openings: are entrances/exits placed plausibly?
+- scale: does the overall shape/proportion match the venue type?
+- features: are distinctive objects (slides, fountains, screens, goals…) captured?
+
+Output ONLY JSON:
+{{"score": 0.0-1.0 overall fidelity,
+  "label": "faithful" | "partial" | "poor",
+  "rationale": "one or two sentences on what matches and what's off",
+  "aspects": {{"structures": 0.0-1.0, "openings": 0.0-1.0, "scale": 0.0-1.0, "features": 0.0-1.0}}}}"""},
+    ]
+    try:
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=500,
+            system=("You are a strict reconstruction-fidelity evaluator. Compare "
+                    "an AI's top-down layout to the source photo and reply with "
+                    "JSON only — be calibrated, not generous."),
+            messages=[{"role": "user", "content": content}],
+        )
+        raw = resp.content[0].text.strip()
+        if "```" in raw:
+            for part in raw.split("```"):
+                cand = part.strip()
+                if cand.startswith("json"):
+                    cand = cand[4:].strip()
+                if cand.startswith("{"):
+                    raw = cand
+                    break
+        data = json.loads(raw.strip())
+    except Exception:
+        return None
+
+    try:
+        score = float(data.get("score", 0.0))
+    except (TypeError, ValueError):
+        score = 0.0
+    score = max(0.0, min(1.0, score))
+    label = str(data.get("label", "")).lower().strip()
+    if label not in ("faithful", "partial", "poor"):
+        label = "faithful" if score >= 0.75 else "partial" if score >= 0.5 else "poor"
+
+    aspects = {}
+    for k in ("structures", "openings", "scale", "features"):
+        try:
+            aspects[k] = round(max(0.0, min(1.0, float(data.get("aspects", {}).get(k, score)))), 2)
+        except (TypeError, ValueError):
+            aspects[k] = round(score, 2)
+
+    return {
+        "score":     round(score, 3),
+        "label":     label,
+        "rationale": str(data.get("rationale", ""))[:280],
+        "aspects":   aspects,
+    }
+
+
 # ─── AGENT 1: VENUE AGENT ────────────────────────────────────────────────────
 
 def run_venue_agent(venue_description, save_path="venue_config.json"):

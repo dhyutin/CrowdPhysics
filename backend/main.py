@@ -65,7 +65,7 @@ _load_env_file(ROOT / ".env")
 
 # Initialize Arize tracing BEFORE importing claude_interpreter (which builds the
 # Anthropic client). Auto-instruments every Claude call.
-from instrumentation import setup_tracing
+from instrumentation import setup_tracing, trace_evaluation
 setup_tracing()
 
 # OpenTelemetry tracer for the live inference loop. After setup_tracing() this
@@ -94,6 +94,7 @@ from claude_interpreter import (
     extract_scene_props,
     refine_venue_layout,
     agent_behaviors,
+    evaluate_reconstruction,
     plan_event_layout,
     event_plan_points,
 )
@@ -1785,7 +1786,7 @@ def _capacity_check(area_m2: float, seating: str, n_people: int | None) -> dict 
 def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
                   duration_min: int, seating: str, ingress: str, notes: str,
                   area_m2: float = 0.0, n_props: int = 0,
-                  refined: bool = False) -> dict:
+                  refined: bool = False, recon_eval: dict | None = None) -> dict:
     """
     Core of the 3D plan: from a (detected or edited) layout, choose the final
     capacity, simulate every scenario, rank them, and have Claude tailor a plan,
@@ -1922,6 +1923,13 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
          "detail": (f"{n_props} props (slides, fountains, benches…)"
                     if n_props else "no distinctive props"),
          "status": "ok"},
+        *([{
+            "agent": "Reconstruction Eval · Arize", "icon": "claude",
+            "action": "Scored 3D reconstruction vs. the photo",
+            "detail": (f"{int(round(recon_eval['score'] * 100))}% fidelity · "
+                       f"{recon_eval['label']}"),
+            "status": "danger" if recon_eval["label"] == "poor" else "ok",
+        }] if recon_eval else []),
         {"agent": "Scenario Architect", "icon": "plan",
          "action": "Generated layout scenarios",
          "detail": f"{len(scenarios)} arrangements simulated & ranked",
@@ -1955,6 +1963,7 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
         "capacity_estimate": area_est,
         "capacity_check":    cap_check,
         "agent_plan":        agent_plan,
+        "reconstruction_eval": recon_eval,
         "agent_trace":       agent_trace,
     }
 
@@ -2015,10 +2024,17 @@ async def plan3d(
     except Exception:
         pass
 
+    # Reconstruction-fidelity evaluation (Arize-traced LLM-as-judge): does the
+    # rebuilt world model actually match the photo? Best-effort, never blocks.
+    recon_eval = trace_evaluation(
+        "reconstruction_eval", "Reconstruction Fidelity",
+        lambda: evaluate_reconstruction(image_b64, layout, media_type))
+
     out = _build_plan3d(
         layout, purpose=purpose, n_people=n_people, density=density,
         duration_min=duration_min, seating=seating, ingress=ingress,
-        notes=notes, area_m2=area_m2, n_props=n_props, refined=False)
+        notes=notes, area_m2=area_m2, n_props=n_props, refined=False,
+        recon_eval=recon_eval)
     return JSONResponse(_numpy_clean(out))
 
 

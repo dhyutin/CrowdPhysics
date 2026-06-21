@@ -558,6 +558,23 @@ export interface AgentPlan {
   source?: string; // "llm" | "layout"
 }
 
+export interface CapacityCheck {
+  given: number;
+  healthy_capacity: number;
+  crush_capacity: number;
+  planned_capacity: number;
+  verdict: "ok" | "tight" | "unreasonable";
+  message: string;
+}
+
+// Arize-traced LLM-as-judge: does the 3D reconstruction match the photo?
+export interface ReconstructionEval {
+  score: number; // 0-1 overall fidelity
+  label: "faithful" | "partial" | "poor";
+  rationale: string;
+  aspects: { structures: number; openings: number; scale: number; features: number };
+}
+
 export interface Plan3DResult {
   layout: VenueLayout;
   n_people: number;
@@ -570,7 +587,9 @@ export interface Plan3DResult {
   safety_report: string;
   agent_trace: AgentTraceStep[];
   capacity_estimate?: CapacityEstimate | null;
+  capacity_check?: CapacityCheck | null;
   agent_plan?: AgentPlan | null;
+  reconstruction_eval?: ReconstructionEval | null;
   chat_reply?: string; // present on /api/plan3d/refine responses
 }
 

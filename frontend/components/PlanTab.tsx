@@ -9,6 +9,8 @@ import ScenarioCompare from "@/components/ScenarioCompare";
 import PlaybackBar from "@/components/PlaybackBar";
 import PlanPoints from "@/components/PlanPoints";
 
+import type { CrowdPhase } from "@/components/Venue3D";
+
 // three.js touches `window`, so the scene is client-only.
 const Venue3D = dynamic(() => import("@/components/Venue3D"), {
   ssr: false,
@@ -62,6 +64,12 @@ async function fileToImage(file: File): Promise<File> {
   });
 }
 
+const PHASE_META: { label: string; color: string; desc: string }[] = [
+  { label: "Entry", color: "#3FB950", desc: "crowd streams in through the entrances" },
+  { label: "Staying", color: "#4493F8", desc: "crowd occupies the space" },
+  { label: "Exit", color: "#D29922", desc: "crowd disperses through the gates" },
+];
+
 function KPICard({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
   return (
     <div className="card-inset p-3 flex flex-col gap-0.5">
@@ -82,6 +90,7 @@ export default function PlanTab() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(true);
+  const [phase, setPhase] = useState<CrowdPhase>(0);
 
   // "Fix the scene" chat: correct the reconstruction in plain language.
   type ChatMsg = { role: "user" | "agent"; text: string };
@@ -312,6 +321,62 @@ export default function PlanTab() {
             )}
           </div>
         )}
+
+        {result?.reconstruction_eval && (() => {
+          const ev = result.reconstruction_eval!;
+          const pct = Math.round(ev.score * 100);
+          const tone =
+            ev.label === "faithful"
+              ? { bar: "#3FB950", text: "text-emerald", badge: "badge-safe" }
+              : ev.label === "partial"
+              ? { bar: "#D29922", text: "text-amber", badge: "badge-warning" }
+              : { bar: "#F85149", text: "text-crimson", badge: "badge-danger" };
+          return (
+            <div className="card p-4 animate-fade-in flex flex-col gap-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="panel-label">Reconstruction Fidelity</p>
+                <span className="badge-neutral text-[8px] px-1.5 py-0.5 uppercase tracking-wide">
+                  Arize eval
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className={`${tone.badge} text-[9px] px-1.5 py-0.5 uppercase tracking-wide`}>
+                  {ev.label}
+                </span>
+                <p className={`kpi-value text-2xl ${tone.text}`}>{pct}%</p>
+              </div>
+              <div className="card-inset p-1 h-2 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${pct}%`, background: tone.bar }}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {([
+                  ["structures", "Structures"],
+                  ["openings", "Openings"],
+                  ["scale", "Scale"],
+                  ["features", "Features"],
+                ] as const).map(([k, label]) => (
+                  <div key={k} className="card-inset px-2 py-1 flex items-center justify-between">
+                    <span className="font-mono text-[8px] text-text3">{label}</span>
+                    <span className="font-mono text-[9px] text-text2">
+                      {Math.round((ev.aspects[k] ?? 0) * 100)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {ev.rationale && (
+                <p className="font-mono text-[9px] text-text2 leading-tight italic">
+                  “{ev.rationale}”
+                </p>
+              )}
+              <p className="font-mono text-[8px] text-text3">
+                Claude judges the rebuilt world model against your photo · traced to Arize AX
+              </p>
+            </div>
+          );
+        })()}
       </div>
 
       {/* ── 3D simulation ────────────────────────────── */}
@@ -327,6 +392,48 @@ export default function PlanTab() {
               sub={m.n_danger_zones ? "need attention" : "all clear"}
               color={m.n_danger_zones ? "text-crimson" : "text-emerald"}
             />
+          </div>
+        )}
+
+        {result?.capacity_check && result.capacity_check.verdict !== "ok" && (
+          <div
+            className="card border px-4 py-3 animate-fade-in flex items-start gap-3"
+            style={
+              result.capacity_check.verdict === "unreasonable"
+                ? { background: "rgba(248,81,73,0.06)", borderColor: "rgba(248,81,73,0.35)" }
+                : { background: "rgba(210,153,34,0.06)", borderColor: "rgba(210,153,34,0.35)" }
+            }
+          >
+            <svg
+              className={`w-5 h-5 flex-shrink-0 mt-0.5 ${result.capacity_check.verdict === "unreasonable" ? "text-crimson" : "text-amber"}`}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.8"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+            </svg>
+            <div className="flex-1 min-w-0">
+              <p
+                className={`font-mono text-[10px] uppercase tracking-wider mb-1 ${result.capacity_check.verdict === "unreasonable" ? "text-crimson" : "text-amber"}`}
+              >
+                {result.capacity_check.verdict === "unreasonable"
+                  ? "Unreasonable capacity — planning for a healthy range"
+                  : "Dense for this area"}
+              </p>
+              <p className="text-xs text-text2 leading-relaxed">{result.capacity_check.message}</p>
+              <div className="flex flex-wrap gap-3 mt-2">
+                <span className="font-mono text-[9px] text-text3">
+                  Requested <span className="text-text1">{result.capacity_check.given.toLocaleString()}</span>
+                </span>
+                <span className="font-mono text-[9px] text-text3">
+                  Healthy <span className="text-emerald">{result.capacity_check.healthy_capacity.toLocaleString()}</span>
+                </span>
+                <span className="font-mono text-[9px] text-text3">
+                  Crush limit <span className="text-crimson">{result.capacity_check.crush_capacity.toLocaleString()}</span>
+                </span>
+                <span className="font-mono text-[9px] text-text3">
+                  Simulating <span className="text-lavender">{result.n_people.toLocaleString()}</span>
+                </span>
+              </div>
+            </div>
           </div>
         )}
 
@@ -362,7 +469,38 @@ export default function PlanTab() {
                     frameRef={frameRef}
                     playingRef={playingRef}
                     agentPlan={result!.agent_plan}
+                    onPhase={setPhase}
                   />
+
+                  {/* Phase choreography: entry → staying → exit */}
+                  <div className="absolute top-3 left-3 flex flex-col gap-1.5 pointer-events-none">
+                    <div className="flex items-center gap-1">
+                      {PHASE_META.map((p, i) => (
+                        <div
+                          key={p.label}
+                          className="flex items-center gap-1 px-2 py-1 rounded transition-all"
+                          style={{
+                            background: i === phase ? `${p.color}26` : "rgba(13,17,23,0.7)",
+                            border: `1px solid ${i === phase ? p.color : "transparent"}`,
+                          }}
+                        >
+                          <span
+                            className="w-1.5 h-1.5 rounded-full"
+                            style={{ background: p.color, opacity: i === phase ? 1 : 0.4 }}
+                          />
+                          <span
+                            className="font-mono text-[9px]"
+                            style={{ color: i === phase ? p.color : "#6E7681" }}
+                          >
+                            {p.label}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <span className="font-mono text-[8px] text-text3 bg-void/70 px-2 py-0.5 rounded self-start">
+                      {PHASE_META[phase].desc}
+                    </span>
+                  </div>
                   <div className="absolute top-3 right-3 flex flex-col gap-1 bg-void/80 px-2 py-2 rounded pointer-events-none">
                     {[
                       ["low", "#4493F8"],

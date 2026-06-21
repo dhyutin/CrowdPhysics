@@ -27,6 +27,21 @@ export function estimateCapacity(
   return { perM2: Math.round(perM2 * 100) / 100, capacity: Math.max(1, Math.round(areaM2 * usable * perM2)) };
 }
 
+// Mirrors backend _area_capacities(): healthy + crush limits for the area.
+export function capacityBands(
+  areaM2: number,
+  seating: string
+): { healthy: number; crush: number } | null {
+  if (!areaM2 || areaM2 <= 0) return null;
+  const usable = areaM2 * 0.78;
+  const healthyPerM2 = seating === "seated" ? 1.0 : seating === "mixed" ? 1.5 : 2.0;
+  const crushPerM2 = seating === "seated" ? 2.0 : seating === "mixed" ? 3.0 : 4.0;
+  return {
+    healthy: Math.max(1, Math.round(usable * healthyPerM2)),
+    crush: Math.max(1, Math.round(usable * crushPerM2)),
+  };
+}
+
 const PURPOSES = [
   "Concert",
   "Sports match",
@@ -110,6 +125,27 @@ export default function EventIntake({
           placeholder="auto-estimate"
           inputMode="numeric"
         />
+        {(() => {
+          const n = parseInt(value.nPeople) || 0;
+          const bands = capacityBands(parseFloat(value.areaM2) || 0, value.seating);
+          if (!n || !bands) return null;
+          if (n > bands.crush) {
+            return (
+              <p className="font-mono text-[9px] text-crimson mt-1 leading-snug">
+                ⚠ Unsafe for this area (crush limit ~{bands.crush.toLocaleString()}). We’ll
+                plan for a healthy ~{bands.healthy.toLocaleString()}.
+              </p>
+            );
+          }
+          if (n > bands.healthy) {
+            return (
+              <p className="font-mono text-[9px] text-amber mt-1 leading-snug">
+                Dense for this area — healthy ~{bands.healthy.toLocaleString()}.
+              </p>
+            );
+          }
+          return null;
+        })()}
       </div>
 
       <div>

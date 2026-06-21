@@ -629,18 +629,31 @@ function DangerMarkers({ zones }: { zones: DangerZone[] }) {
 
 const C_LLM = new THREE.Color("#A371F7"); // agent-LLM piloted (violet)
 
+// Phase choreography (seconds): the crowd ENTERS, STAYS, then EXITS, looping.
+const PH_ENTER = 7;
+const PH_STAY = 12;
+const PH_EXIT = 7;
+const PH_TOTAL = PH_ENTER + PH_STAY + PH_EXIT;
+export type CrowdPhase = 0 | 1 | 2; // 0 entry · 1 staying · 2 exit
+
+function elCenter(e: VenueLayoutElement): [number, number] {
+  return [e.x + e.w / 2, e.y + e.h / 2];
+}
+
 function Agents({
   scenario,
   count,
   frameRef,
   playingRef,
   agentPlan,
+  onPhase,
 }: {
   scenario: Scenario;
   count: number;
   frameRef: MutableRefObject<number>;
   playingRef: MutableRefObject<boolean>;
   agentPlan?: AgentPlan | null;
+  onPhase?: (phase: CrowdPhase) => void;
 }) {
   const wmRef = useRef<THREE.InstancedMesh>(null);
   const llmRef = useRef<THREE.InstancedMesh>(null);
@@ -648,8 +661,13 @@ function Agents({
   const walls = scenario.field.walls;
   const pMax = scenario.field.p_max || 1;
 
-  // Build per-agent state: positions, kind (llm/world), goal + speed, and the
-  // index of each agent within its own mesh.
+  // Phase clock + bookkeeping (advances only while playing).
+  const phaseClock = useRef(0);
+  const cycleRef = useRef(-1);
+  const reportedPhase = useRef<CrowdPhase | -1>(-1);
+
+  // Build per-agent state: stay position (home), entry point, nearest exit,
+  // kind (llm/world), goal + speed, and the index within its own mesh.
   const sim = useMemo(() => {
     const behaviors = agentPlan?.behaviors ?? [];
     const llmFrac = behaviors.length
@@ -657,17 +675,32 @@ function Agents({
       : 0;
     const nLLM = Math.round(count * llmFrac);
 
+    // Entry / exit points from the layout (fall back to the perimeter).
+    const els = scenario.layout.elements ?? [];
+    const entryEls = els.filter((e) => e.type === "entry");
+    const gateEls = els.filter((e) => e.type === "gate");
+    const enterPts = (entryEls.length ? entryEls : gateEls).map(elCenter);
+    const exitPts = (gateEls.length ? gateEls : entryEls).map(elCenter);
+    const ENTER: [number, number][] = enterPts.length
+      ? enterPts
+      : [[0.5, 0.03], [0.03, 0.5], [0.97, 0.5], [0.5, 0.97]];
+    const EXIT: [number, number][] = exitPts.length ? exitPts : ENTER;
+
     const pos = new Float32Array(count * 2);
+    const home = new Float32Array(count * 2);
+    const entryFrom = new Float32Array(count * 2);
+    const exitTo = new Float32Array(count * 2);
     const goal = new Float32Array(count * 2);
     const speed = new Float32Array(count);
     const isLLM = new Uint8Array(count);
     const local = new Int32Array(count);
 
-    // Cumulative behavior fractions to spread LLM agents across groups.
     const cum: number[] = [];
     let acc = 0;
     for (const b of behaviors) { acc += Math.max(0, b.fraction || 0); cum.push(acc); }
     const totalFrac = acc || 1;
+    const jit = () => (Math.random() - 0.5) * 0.06;
+    const clamp01 = (v: number) => Math.min(0.97, Math.max(0.03, v));
 
     let wmLocal = 0, llmLocal = 0;
     for (let i = 0; i < count; i++) {
@@ -677,12 +710,27 @@ function Agents({
         ny = 0.04 + Math.random() * 0.92;
         if (!isWall(walls, G, nx, ny)) break;
       }
+      home[i * 2] = nx;
+      home[i * 2 + 1] = ny;
       pos[i * 2] = nx;
       pos[i * 2 + 1] = ny;
 
+      // Enter from one of the entry points (round-robin + jitter).
+      const ep = ENTER[i % ENTER.length];
+      entryFrom[i * 2] = clamp01(ep[0] + jit());
+      entryFrom[i * 2 + 1] = clamp01(ep[1] + jit());
+
+      // Exit via the nearest gate to this agent's home spot.
+      let best = 0, bd = Infinity;
+      for (let k = 0; k < EXIT.length; k++) {
+        const d = (EXIT[k][0] - nx) ** 2 + (EXIT[k][1] - ny) ** 2;
+        if (d < bd) { bd = d; best = k; }
+      }
+      exitTo[i * 2] = clamp01(EXIT[best][0] + jit());
+      exitTo[i * 2 + 1] = clamp01(EXIT[best][1] + jit());
+
       if (i < nLLM && behaviors.length) {
         isLLM[i] = 1;
-        // Assign a behavior group by cumulative fraction.
         const t = ((i + 0.5) / Math.max(1, nLLM)) * totalFrac;
         let bi = cum.findIndex((c) => t <= c);
         if (bi < 0) bi = behaviors.length - 1;
@@ -697,8 +745,9 @@ function Agents({
         local[i] = wmLocal++;
       }
     }
-    return { pos, goal, speed, isLLM, local, nLLM, wmCount: count - nLLM };
-  }, [count, G, walls, agentPlan]);
+    return { pos, home, entryFrom, exitTo, goal, speed, isLLM, local,
+             nLLM, wmCount: count - nLLM };
+  }, [count, G, walls, agentPlan, scenario.layout.elements]);
 
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const color = useMemo(() => new THREE.Color(), []);
@@ -713,15 +762,36 @@ function Agents({
     const pr = scenario.field.pressure[f];
     if (!vx || !vy || !pr) return;
 
-    const { pos, goal, speed, isLLM, local } = sim;
+    const { pos, home, entryFrom, exitTo, goal, speed, isLLM, local } = sim;
     const moving = playingRef.current;
     const dt = Math.min(delta, 0.05);
-    const KV = 0.9;     // follow the flow field (world-model agents)
-    const KP = 0.05;    // gather toward higher pressure (crowd build-up)
+
+    // Advance the phase clock and resolve the current phase.
+    if (moving) phaseClock.current += dt;
+    const tcyc = phaseClock.current % PH_TOTAL;
+    const cycle = Math.floor(phaseClock.current / PH_TOTAL);
+    const phase: CrowdPhase = tcyc < PH_ENTER ? 0 : tcyc < PH_ENTER + PH_STAY ? 1 : 2;
+
+    // New cycle → everyone starts back at the entry points (loop restart).
+    if (cycle !== cycleRef.current) {
+      cycleRef.current = cycle;
+      for (let i = 0; i < count; i++) {
+        pos[i * 2] = entryFrom[i * 2];
+        pos[i * 2 + 1] = entryFrom[i * 2 + 1];
+      }
+    }
+    if (phase !== reportedPhase.current) {
+      reportedPhase.current = phase;
+      onPhase?.(phase);
+    }
+
+    const KV = 0.9;        // follow the flow field (world-model agents, stay)
+    const KP = 0.05;       // gather toward higher pressure (crowd build-up)
     const NOISE = 0.18;
     const SPEED = 1.6;
-    const GOAL_K = 1.15;  // goal pull (llm agents)
-    const LLM_FIELD = 0.35; // residual field influence on llm agents
+    const GOAL_K = 1.15;   // goal pull (llm agents, stay)
+    const LLM_FIELD = 0.35;
+    const MOVE_K = 1.4;    // entry / exit steering strength
 
     const cl = (v: number) => Math.min(G - 1, Math.max(0, v));
 
@@ -737,21 +807,29 @@ function Agents({
         const uy = vy[gy][gx];
         let dx: number, dy: number;
 
-        if (llmAgent) {
-          // Goal-seeking intent + a little field so crushes still impede them.
+        if (phase === 0 || phase === 2) {
+          // ENTRY: stream from the entrance to the stay spot.
+          // EXIT:  stream from wherever they are to the nearest gate.
+          const tgtX = phase === 0 ? home[i * 2] : exitTo[i * 2];
+          const tgtY = phase === 0 ? home[i * 2 + 1] : exitTo[i * 2 + 1];
+          let tx = tgtX - nx;
+          let ty = tgtY - ny;
+          const dist = Math.hypot(tx, ty) || 1e-3;
+          if (dist < 0.02) { tx = Math.random() - 0.5; ty = Math.random() - 0.5; }
+          else { tx /= dist; ty /= dist; }
+          dx = tx * MOVE_K * speed[i] + (Math.random() - 0.5) * NOISE;
+          dy = ty * MOVE_K * speed[i] + (Math.random() - 0.5) * NOISE;
+        } else if (llmAgent) {
+          // STAY (LLM): goal-seeking intent + a little field so crushes impede.
           let tx = goal[i * 2] - nx;
           let ty = goal[i * 2 + 1] - ny;
           const dist = Math.hypot(tx, ty) || 1e-3;
-          if (dist < 0.06) {
-            // Arrived → mill around the goal instead of freezing.
-            tx = (Math.random() - 0.5);
-            ty = (Math.random() - 0.5);
-          } else {
-            tx /= dist; ty /= dist;
-          }
+          if (dist < 0.06) { tx = Math.random() - 0.5; ty = Math.random() - 0.5; }
+          else { tx /= dist; ty /= dist; }
           dx = tx * GOAL_K * speed[i] + ux * LLM_FIELD + (Math.random() - 0.5) * NOISE;
           dy = ty * GOAL_K * speed[i] + uy * LLM_FIELD + (Math.random() - 0.5) * NOISE;
         } else {
+          // STAY (world model): advect through the simulated flow field.
           const gpx = pr[gy][cl(gx + 1)] - pr[gy][cl(gx - 1)];
           const gpy = pr[cl(gy + 1)][gx] - pr[cl(gy - 1)][gx];
           dx = ux * KV + gpx * KP + (Math.random() - 0.5) * NOISE;
@@ -776,7 +854,6 @@ function Agents({
       if (llmAgent) {
         if (!llm) continue;
         llm.setMatrixAt(local[i], dummy.matrix);
-        // Violet base, flushing toward red where pressure is high.
         const t = Math.max(0, Math.min(1, p / (pMax || 1)));
         color.copy(C_LLM).lerp(C_HIGH, t * 0.8);
         llm.setColorAt(local[i], color);
@@ -867,6 +944,7 @@ export default function Venue3D({
   frameRef,
   playingRef,
   agentPlan,
+  onPhase,
   maxAgents = 1400,
 }: {
   scenario: Scenario;
@@ -874,6 +952,7 @@ export default function Venue3D({
   frameRef: MutableRefObject<number>;
   playingRef: MutableRefObject<boolean>;
   agentPlan?: AgentPlan | null;
+  onPhase?: (phase: CrowdPhase) => void;
   maxAgents?: number;
 }) {
   const count = Math.max(40, Math.min(maxAgents, nPeople || 600));
@@ -924,6 +1003,7 @@ export default function Venue3D({
         frameRef={frameRef}
         playingRef={playingRef}
         agentPlan={agentPlan}
+        onPhase={onPhase}
       />
 
       <OrbitControls

@@ -56,3 +56,61 @@ def setup_tracing() -> bool:
     except Exception as exc:
         print(f"[arize] ⚠  Tracing setup failed ({exc}) — continuing without it")
         return False
+
+
+def _get_tracer():
+    """OTel tracer if Arize tracing is active, else None."""
+    if not _INITIALIZED:
+        return None
+    try:
+        from opentelemetry import trace
+        return trace.get_tracer("crowdphysics.evals")
+    except Exception:
+        return None
+
+
+def trace_evaluation(span_name: str, eval_name: str, fn):
+    """
+    Run `fn()` (an LLM-as-judge that returns {score, label, rationale, ...})
+    inside a dedicated Arize span and attach the result as an evaluation.
+
+    The score/label/explanation are written as `eval.<eval_name>.*` span
+    attributes, which Arize AX ingests and displays as an evaluation on the
+    trace. Fully best-effort: if tracing is off or anything fails, `fn()` still
+    runs and its result is returned unchanged.
+
+    Returns whatever `fn()` returns (or None on judge failure).
+    """
+    tracer = _get_tracer()
+    if tracer is None:
+        try:
+            return fn()
+        except Exception:
+            return None
+
+    with tracer.start_as_current_span(span_name) as span:
+        try:
+            span.set_attribute("openinference.span.kind", "EVALUATOR")
+        except Exception:
+            pass
+        try:
+            result = fn()
+        except Exception as exc:
+            try:
+                span.set_attribute("error.message", str(exc))
+            except Exception:
+                pass
+            return None
+
+        if isinstance(result, dict):
+            try:
+                if result.get("score") is not None:
+                    span.set_attribute(f"eval.{eval_name}.score", float(result["score"]))
+                if result.get("label") is not None:
+                    span.set_attribute(f"eval.{eval_name}.label", str(result["label"]))
+                expl = result.get("rationale") or result.get("explanation")
+                if expl:
+                    span.set_attribute(f"eval.{eval_name}.explanation", str(expl)[:1000])
+            except Exception:
+                pass
+        return result
