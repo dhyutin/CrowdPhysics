@@ -15,6 +15,20 @@ export async function analyzeVideo(
   return res.json();
 }
 
+export async function monitorUrl(
+  url: string,
+  venue: string,
+  nFrames = 35
+): Promise<MonitorResult> {
+  const res = await fetch(`${BASE}/api/monitor_url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, venue, n_frames: nFrames }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function runSimulation(
   payload: SimulatePayload
 ): Promise<SimulateResult> {
@@ -49,6 +63,16 @@ export interface AnalyzeResult {
   rl_explanation: string;
   timeline: TimelinePoint[];
   peak_physics: Record<string, unknown> | null;
+}
+
+export interface CaptureSource {
+  url: string;
+  frames_captured: number;
+  capture_fps: number;
+}
+
+export interface MonitorResult extends AnalyzeResult {
+  source?: CaptureSource;
 }
 
 export interface SimulatePayload {

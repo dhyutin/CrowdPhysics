@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { analyzeVideo, type AnalyzeResult, type TimelinePoint } from "@/lib/api";
+import { analyzeVideo, monitorUrl, type MonitorResult, type TimelinePoint } from "@/lib/api";
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
   SAFE:        { badge: "badge-safe",    dot: "dot-live",    label: "Safe" },
@@ -69,18 +69,26 @@ function PipelineStep({ n, label }: { n: number; label: string }) {
 }
 
 export default function MonitorTab() {
+  const [mode, setMode]     = useState<"upload" | "live">("upload");
   const [file, setFile]     = useState<File | null>(null);
+  const [liveUrl, setLiveUrl] = useState("https://www.abbeyroad.com/crossing");
   const [venue, setVenue]   = useState("Main Stage");
   const [loading, setLoad]  = useState(false);
-  const [result, setResult] = useState<AnalyzeResult | null>(null);
+  const [result, setResult] = useState<MonitorResult | null>(null);
   const [error, setError]   = useState<string | null>(null);
 
-  async function handleAnalyze() {
-    if (!file) return;
+  const canRun = mode === "upload" ? !!file : liveUrl.trim().length > 0;
+
+  async function handleRun() {
+    if (!canRun) return;
     setLoad(true);
     setError(null);
     try {
-      setResult(await analyzeVideo(file, venue));
+      if (mode === "upload") {
+        setResult(await analyzeVideo(file!, venue));
+      } else {
+        setResult(await monitorUrl(liveUrl.trim(), venue || "Live Camera"));
+      }
     } catch (e: unknown) {
       setError(String(e));
     } finally {
