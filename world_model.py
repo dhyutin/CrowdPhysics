@@ -143,14 +143,38 @@ class CrowdWorldModel(nn.Module):
                                                hidden_dim=hidden_dim,
                                                n_layers=n_layers)
         self.latent_dim = latent_dim
+        self.input_dim = input_dim
+
+        # Feature standardization stats, carried WITH the checkpoint as
+        # buffers so the model self-normalizes raw flow features at both
+        # train and inference time (callers always pass raw features).
+        # Identity by default (mean 0 / std 1); set via set_feature_stats()
+        # before training. This keeps the loss terms (transition vs recon)
+        # on a comparable scale so the model actually learns dynamics
+        # instead of being dominated by large-magnitude raw reconstruction.
+        self.register_buffer("feat_mean", torch.zeros(input_dim))
+        self.register_buffer("feat_std", torch.ones(input_dim))
+
+    def set_feature_stats(self, mean, std):
+        """Set the standardization buffers (per-feature mean/std)."""
+        mean_t = torch.as_tensor(mean, dtype=torch.float32).reshape(-1)
+        std_t = torch.as_tensor(std, dtype=torch.float32).reshape(-1)
+        std_t = torch.where(std_t < 1e-6, torch.ones_like(std_t), std_t)
+        self.feat_mean.copy_(mean_t.to(self.feat_mean.device))
+        self.feat_std.copy_(std_t.to(self.feat_std.device))
+
+    def standardize(self, x):
+        """Apply (x - mean) / std using the stored buffers. x: (..., 256)."""
+        return (x - self.feat_mean) / self.feat_std
 
     def encode_sequence(self, feature_seq):
         """
-        Encode a sequence of flow features to latent states.
-        feature_seq: (batch, T, 256) → z: (batch, T, 64)
+        Encode a sequence of RAW flow features to latent states.
+        Standardizes internally. feature_seq: (batch, T, 256) → z: (batch, T, 64)
         """
-        b, t, f = feature_seq.shape
-        z = self.encoder(feature_seq.reshape(-1, f))
+        x = self.standardize(feature_seq)
+        b, t, f = x.shape
+        z = self.encoder(x.reshape(-1, f))
         return z.reshape(b, t, self.latent_dim)
 
     def forward(self, feature_seq):

@@ -47,6 +47,7 @@ WM_EPOCHS = int(os.environ.get("WM_EPOCHS", "1500"))
 TUNE_MAX_TRIALS = int(os.environ.get("TUNE_MAX_TRIALS", "0"))
 CACHE_PATH = os.environ.get("FEATURE_CACHE", "data/features_cache.pkl")
 VIDEO_DIR = os.environ.get("VIDEO_DIR", "data/videos")
+WM_OUTPUT = os.environ.get("WM_OUTPUT", "models/world_model.pt")
 
 # Candidate training configs. Architecture is intentionally absent.
 # The first entry is the current baseline (train.py defaults).
@@ -136,6 +137,11 @@ def build_model():
 
 def train_one(model, features_list, cfg, epochs, scheduler_T=None, log=None):
     """Train in place for `epochs`. Returns final-epoch avg train loss."""
+    # Fit standardization on this split's frames (stored as model buffers).
+    all_frames = np.concatenate(
+        [np.asarray(s, dtype=np.float32) for s in features_list], axis=0)
+    model.set_feature_stats(all_frames.mean(0), all_frames.std(0))
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["lr"],
                                   weight_decay=cfg["wd"])
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -162,7 +168,8 @@ def train_one(model, features_list, cfg, epochs, scheduler_T=None, log=None):
                 lv = log_var.clamp(-6, 2)
                 kl_loss = -0.5 * torch.mean(
                     1 + lv - mu.pow(2) - lv.exp())
-                recon_loss = nn.MSELoss()(recon[:, :-1], x[:, 1:].detach())
+                recon_loss = nn.MSELoss()(
+                    recon[:, :-1], model.standardize(x)[:, 1:].detach())
                 loss = (trans_loss + cfg["kl"] * kl_loss
                         + cfg["recon"] * recon_loss)
 
@@ -214,9 +221,10 @@ def main():
         "hidden_dim": HIDDEN_DIM, "n_layers": N_LAYERS,
         "tune_epochs": TUNE_EPOCHS, "n_candidates": len(CANDIDATES)})
 
+    n_cand = len(CANDIDATES[:TUNE_MAX_TRIALS] if TUNE_MAX_TRIALS
+                 else CANDIDATES)
     print("\n" + "=" * 60)
-    print(f"HYPERPARAMETER SWEEP — {len(CANDIDATES)} configs "
-          f"× {TUNE_EPOCHS} epochs")
+    print(f"HYPERPARAMETER SWEEP — {n_cand} configs × {TUNE_EPOCHS} epochs")
     print("=" * 60)
 
     candidates = CANDIDATES[:TUNE_MAX_TRIALS] if TUNE_MAX_TRIALS else CANDIDATES
@@ -264,15 +272,12 @@ def main():
               epochs=WM_EPOCHS, log=final_log)
     final_log.close(plot_keys=["train_loss", "lr"])
 
-    torch.save(final_model.state_dict(), "models/world_model.pt")
-    print("\n✓ Saved best world model → models/world_model.pt")
+    torch.save(final_model.state_dict(), WM_OUTPUT)
+    print(f"\n✓ Saved best world model → {WM_OUTPUT}")
     print(f"  config: {best_cfg}")
     print(f"  selection val_mse: {best_val:.6f}")
     print("\nNext: train the RL policy on this world model:")
     print("    RL_EPISODES=15000 python3 train_rl.py")
-
-
-WM_EPOCHS = int(os.environ.get("WM_EPOCHS", "1500"))
 
 
 if __name__ == "__main__":

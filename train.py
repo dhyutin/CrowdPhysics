@@ -100,6 +100,13 @@ def train_world_model(features_list, epochs=None, seq_len=None,
     batch_size = batch_size or BATCH_SIZE
 
     model = CrowdWorldModel(hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS).to(DEVICE)
+
+    # Fit feature standardization on all frames so transition and recon
+    # losses share a comparable scale (stored in the checkpoint as buffers).
+    all_frames = np.concatenate(
+        [np.asarray(s, dtype=np.float32) for s in features_list], axis=0)
+    model.set_feature_stats(all_frames.mean(0), all_frames.std(0))
+
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -146,10 +153,10 @@ def train_world_model(features_list, epochs=None, seq_len=None,
                     1 + log_var_c - mu.pow(2) - log_var_c.exp()
                 )
 
-                # 3. Reconstruction loss (auxiliary)
+                # 3. Reconstruction loss (auxiliary) — in standardized space
                 recon_loss = nn.MSELoss()(
                     recon[:, :-1],
-                    x[:, 1:].detach()
+                    model.standardize(x)[:, 1:].detach()
                 )
 
                 # Total: transition is most important

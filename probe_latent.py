@@ -84,7 +84,10 @@ def main(video_dir: str = "data/videos",
         if len(feats) < WINDOW + 2:
             continue
         with torch.no_grad():
-            z = wm.encoder(torch.FloatTensor(feats)).numpy()          # (T,64)
+            # Standardize raw features the same way the model was trained
+            # (encoder expects standardized input; stats live in the model).
+            z = wm.encoder(
+                wm.standardize(torch.FloatTensor(feats))).numpy()     # (T,64)
         Z_all.append(z)
         for k, y in _physics_targets(feats).items():
             targets_all[k].append(y)
