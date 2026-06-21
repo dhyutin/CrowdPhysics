@@ -273,12 +273,81 @@ async def analyze(
     return JSONResponse(_numpy_clean(result))
 
 
+# ── LIVE-VIEW SESSIONS (Browserbase) ──────────────────────────────────────────
+
+# session_id -> {"connect_url", "url"} for warm sessions backing the live view.
+_live_sessions: dict[str, dict] = {}
+
+
+def _bb_ready() -> bool:
+    return bool(os.environ.get("BROWSERBASE_API_KEY")
+                and os.environ.get("BROWSERBASE_PROJECT_ID"))
+
+
+def _release_live(session_id: str) -> None:
+    info = _live_sessions.pop(session_id, None)
+    if info is None:
+        return
+    try:
+        from agents.browserbase_monitor import end_session
+        end_session(session_id)
+    except Exception:
+        pass
+
+
+class LiveSessionRequest(BaseModel):
+    url: str
+
+
+@app.post("/api/live_session")
+def live_session(req: LiveSessionRequest):
+    """
+    Open a Browserbase cloud browser on `url` and return an embeddable
+    live-view URL so the frontend can show the feed before analysis.
+    """
+    if not _bb_ready():
+        raise HTTPException(
+            status_code=400,
+            detail="BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
+
+    try:
+        from agents.browserbase_monitor import start_live_session
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Browserbase unavailable: {exc}")
+
+    # Only keep one live preview session at a time.
+    for old_id in list(_live_sessions.keys()):
+        _release_live(old_id)
+
+    try:
+        info = start_live_session(req.url)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Live session failed: {exc}")
+
+    sid = info["session_id"]
+    _live_sessions[sid] = {"connect_url": info["connect_url"], "url": req.url}
+    return {"session_id": sid, "live_view_url": info["live_view_url"]}
+
+
+class EndSessionRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/api/end_live_session")
+def end_live_session(req: EndSessionRequest):
+    _release_live(req.session_id)
+    return {"ok": True}
+
+
 # ── POST /api/monitor_url ─────────────────────────────────────────────────────
 
 class MonitorURLRequest(BaseModel):
     url: str
-    venue:    str = "Live Camera"
-    n_frames: int = 45
+    venue:      str = "Live Camera"
+    n_frames:   int = 45
+    session_id: str | None = None
 
 
 @app.post("/api/monitor_url")
@@ -286,12 +355,12 @@ def monitor_url(req: MonitorURLRequest):
     """
     Monitor a live web camera / livestream page via Browserbase.
 
-    Spins up a Browserbase cloud browser, navigates to the page, captures
-    rendered frames, and runs them through the same crowd-physics pipeline
-    as /api/analyze. Returns the Monitor-tab result plus a `source` block.
+    Captures rendered frames and runs them through the same crowd-physics
+    pipeline as /api/analyze. If `session_id` references a warm live-view
+    session, it reuses (and then releases) that session for a faster capture;
+    otherwise it spins up a fresh session.
     """
-    if not os.environ.get("BROWSERBASE_API_KEY") or \
-            not os.environ.get("BROWSERBASE_PROJECT_ID"):
+    if not _bb_ready():
         raise HTTPException(
             status_code=400,
             detail="BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
@@ -304,8 +373,17 @@ def monitor_url(req: MonitorURLRequest):
             detail=f"Browserbase capture unavailable: {exc}")
 
     n_frames = max(2, min(req.n_frames, 120))
+    warm = _live_sessions.get(req.session_id) if req.session_id else None
+
     try:
-        frames, fps = capture_frames(req.url, n_frames=n_frames)
+        if warm:
+            frames, fps = capture_frames(
+                req.url, n_frames=n_frames,
+                connect_url=warm["connect_url"], navigate=False,
+                release_session_id=req.session_id)
+            _live_sessions.pop(req.session_id, None)
+        else:
+            frames, fps = capture_frames(req.url, n_frames=n_frames)
     except Exception as exc:
         raise HTTPException(
             status_code=502, detail=f"Browserbase capture failed: {exc}")

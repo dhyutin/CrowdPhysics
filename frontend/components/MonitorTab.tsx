@@ -1,7 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { analyzeVideo, monitorUrl, type MonitorResult, type TimelinePoint } from "@/lib/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  analyzeVideo,
+  monitorUrl,
+  startLiveSession,
+  endLiveSession,
+  type MonitorResult,
+  type TimelinePoint,
+} from "@/lib/api";
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
   SAFE:        { badge: "badge-safe",    dot: "dot-live",    label: "Safe" },
@@ -72,17 +79,56 @@ export default function MonitorTab() {
   const [mode, setMode]     = useState<"upload" | "live">("upload");
   const [file, setFile]     = useState<File | null>(null);
   const [liveUrl, setLiveUrl] = useState("https://www.abbeyroad.com/crossing");
-  const [livePreview, setLivePreview] = useState("https://www.abbeyroad.com/crossing");
   const [venue, setVenue]   = useState("Main Stage");
   const [loading, setLoad]  = useState(false);
   const [result, setResult] = useState<MonitorResult | null>(null);
   const [error, setError]   = useState<string | null>(null);
 
+  // Browserbase live-view preview state.
+  const [liveView, setLiveView]       = useState<string | null>(null);
+  const [liveSession, setLiveSession] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewErr, setPreviewErr]   = useState<string | null>(null);
+
   // Object URL for previewing the uploaded video locally.
   const objectUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
   useEffect(() => () => { if (objectUrl) URL.revokeObjectURL(objectUrl); }, [objectUrl]);
 
+  // Release the live Browserbase session when the component unmounts.
+  const sessionRef = useRef<string | null>(null);
+  useEffect(() => { sessionRef.current = liveSession; }, [liveSession]);
+  useEffect(() => () => { if (sessionRef.current) endLiveSession(sessionRef.current); }, []);
+
   const canRun = mode === "upload" ? !!file : liveUrl.trim().length > 0;
+
+  async function startPreview() {
+    const u = liveUrl.trim();
+    if (!u) return;
+    if (liveSession) endLiveSession(liveSession);
+    setLiveView(null);
+    setLiveSession(null);
+    setResult(null);
+    setPreviewErr(null);
+    setPreviewLoading(true);
+    try {
+      const s = await startLiveSession(u);
+      setLiveView(s.live_view_url);
+      setLiveSession(s.session_id);
+    } catch (e: unknown) {
+      setPreviewErr(String(e));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function switchMode(next: "upload" | "live") {
+    if (next === "upload" && liveSession) {
+      endLiveSession(liveSession);
+      setLiveSession(null);
+      setLiveView(null);
+    }
+    setMode(next);
+  }
 
   async function handleRun() {
     if (!canRun) return;
@@ -92,7 +138,12 @@ export default function MonitorTab() {
       if (mode === "upload") {
         setResult(await analyzeVideo(file!, venue));
       } else {
-        setResult(await monitorUrl(liveUrl.trim(), venue || "Live Camera"));
+        const r = await monitorUrl(
+          liveUrl.trim(), venue || "Live Camera", 35, liveSession ?? undefined);
+        setResult(r);
+        // The warm session was consumed by the capture.
+        setLiveSession(null);
+        setLiveView(null);
       }
     } catch (e: unknown) {
       setError(String(e));
@@ -124,7 +175,7 @@ export default function MonitorTab() {
             ] as const).map(({ id, label }) => (
               <button
                 key={id}
-                onClick={() => setMode(id)}
+                onClick={() => switchMode(id)}
                 className={`font-mono text-[10px] py-1.5 rounded-md transition-all ${
                   mode === id
                     ? "bg-teal/15 text-teal border border-teal/25"
@@ -166,18 +217,28 @@ export default function MonitorTab() {
                 placeholder="https://… (any public camera page)"
                 value={liveUrl}
                 onChange={(e) => setLiveUrl(e.target.value)}
-                onBlur={() => { setLivePreview(liveUrl.trim()); setResult(null); }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
-                    setLivePreview(liveUrl.trim());
-                    setResult(null);
                     (e.target as HTMLInputElement).blur();
+                    startPreview();
                   }
                 }}
               />
+              <button
+                className="btn-secondary w-full text-[11px]"
+                disabled={!liveUrl.trim() || previewLoading}
+                onClick={startPreview}
+              >
+                {previewLoading ? (
+                  <><span className="spinner-white" /> Opening browser…</>
+                ) : (
+                  <>Load live preview</>
+                )}
+              </button>
               <p className="font-mono text-[9px] text-text3 leading-snug">
-                Preview loads in the panel → click <span className="text-teal">Monitor Live</span> to
-                capture frames via Browserbase and analyze (~30–60s).
+                Opens a Browserbase cloud browser so you can watch the feed,
+                then <span className="text-teal">Monitor Live</span> captures &amp;
+                analyzes it (~30–60s).
               </p>
             </div>
           )}
@@ -227,9 +288,9 @@ export default function MonitorTab() {
       <div className="flex-1 flex flex-col gap-2 p-4 min-w-0 border-r border-border">
         <div className="flex items-center justify-between">
           <p className="panel-label">{mode === "live" ? "Live Source" : "Source Video"}</p>
-          {mode === "live" && livePreview && (
+          {mode === "live" && liveView && (
             <span className="font-mono text-[9px] text-teal flex items-center gap-1.5">
-              <span className="dot-live" /> STREAM
+              <span className="dot-live" /> STREAMING
             </span>
           )}
         </div>
@@ -251,30 +312,46 @@ export default function MonitorTab() {
                 <p className="font-mono text-xs">Upload a video to preview it here</p>
               </div>
             )
+          ) : previewLoading ? (
+            <div className="flex flex-col items-center gap-3 text-text3">
+              <span className="spinner" />
+              <p className="font-mono text-xs">Opening live cloud browser…</p>
+            </div>
+          ) : liveView ? (
+            <iframe
+              key={liveView}
+              src={liveView}
+              title="Live camera feed"
+              className="w-full h-full border-0 animate-fade-in"
+              sandbox="allow-same-origin allow-scripts"
+              allow="clipboard-read; clipboard-write"
+            />
+          ) : result?.source ? (
+            <div className="flex flex-col items-center gap-3 text-text3">
+              <svg className="w-10 h-10 opacity-20 text-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="font-mono text-xs text-center px-6 leading-relaxed">
+                Captured {result.source.frames_captured} frames · session closed.<br />
+                Load a new preview to watch again.
+              </p>
+            </div>
           ) : (
-            livePreview ? (
-              <iframe
-                key={livePreview}
-                src={livePreview}
-                title="Live camera feed"
-                className="w-full h-full border-0 animate-fade-in"
-                allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-              />
-            ) : (
-              <div className="flex flex-col items-center gap-3 text-text3">
-                <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-                </svg>
-                <p className="font-mono text-xs">Enter a stream URL to preview it here</p>
-              </div>
-            )
+            <div className="flex flex-col items-center gap-3 text-text3 px-6 text-center">
+              <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+              </svg>
+              <p className="font-mono text-xs">Click “Load live preview” to watch the feed</p>
+              {previewErr && (
+                <p className="font-mono text-[9px] text-crimson/80 break-all">{previewErr}</p>
+              )}
+            </div>
           )}
         </div>
         {mode === "live" && (
           <p className="font-mono text-[9px] text-text3 leading-snug">
-            Some sites block embedding — if the preview is blank, the live
-            capture &amp; analysis still works through Browserbase.
+            Live view streams the actual Browserbase cloud browser — the same
+            session the physics pipeline analyzes.
           </p>
         )}
       </div>

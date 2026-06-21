@@ -15,15 +15,44 @@ export async function analyzeVideo(
   return res.json();
 }
 
+export interface LiveSession {
+  session_id: string;
+  live_view_url: string;
+}
+
+export async function startLiveSession(url: string): Promise<LiveSession> {
+  const res = await fetch(`${BASE}/api/live_session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function endLiveSession(sessionId: string): Promise<void> {
+  try {
+    await fetch(`${BASE}/api/end_live_session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId }),
+      keepalive: true,
+    });
+  } catch {
+    /* best-effort cleanup */
+  }
+}
+
 export async function monitorUrl(
   url: string,
   venue: string,
-  nFrames = 35
+  nFrames = 35,
+  sessionId?: string
 ): Promise<MonitorResult> {
   const res = await fetch(`${BASE}/api/monitor_url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, venue, n_frames: nFrames }),
+    body: JSON.stringify({ url, venue, n_frames: nFrames, session_id: sessionId ?? null }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

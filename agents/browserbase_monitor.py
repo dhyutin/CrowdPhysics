@@ -27,15 +27,23 @@ BB_PROJECT = os.environ.get("BROWSERBASE_PROJECT_ID", "")
 BB_BASE = "https://api.browserbase.com/v1"
 
 
-def create_session() -> dict:
-    """Create a new Browserbase browser session."""
+def create_session(keep_alive: bool = False) -> dict:
+    """
+    Create a new Browserbase browser session.
+
+    keep_alive=True keeps the session running after the automation client
+    disconnects — required so a live-view URL stays valid for embedding.
+    """
+    body: dict = {"projectId": BB_PROJECT}
+    if keep_alive:
+        body["keepAlive"] = True
     r = requests.post(
         f"{BB_BASE}/sessions",
         headers={
             "x-bb-api-key": BB_KEY,
             "Content-Type": "application/json",
         },
-        json={"projectId": BB_PROJECT},
+        json=body,
         timeout=30,
     )
     r.raise_for_status()
@@ -53,6 +61,81 @@ def end_session(session_id: str) -> None:
         json={"projectId": BB_PROJECT, "status": "REQUEST_RELEASE"},
         timeout=30,
     )
+
+
+def session_debug(session_id: str) -> dict:
+    """Fetch a session's live-view URLs (debuggerFullscreenUrl, pages, ...)."""
+    r = requests.get(
+        f"{BB_BASE}/sessions/{session_id}/debug",
+        headers={"x-bb-api-key": BB_KEY},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def live_view_url(session_id: str) -> str:
+    """Return an embeddable live-view URL for a running session."""
+    dbg = session_debug(session_id)
+    pages = dbg.get("pages") or []
+    if pages and pages[0].get("debuggerFullscreenUrl"):
+        return pages[0]["debuggerFullscreenUrl"]
+    return dbg.get("debuggerFullscreenUrl", "")
+
+
+def start_live_session(url: str, viewport=(1280, 720),
+                       nav_timeout_ms: int = 60000) -> dict:
+    """
+    Create a Browserbase session, navigate it to `url`, start any video
+    playback, and leave it running so its live view can be embedded.
+
+    Returns: {"session_id", "connect_url", "live_view_url", "url"}
+    The caller is responsible for releasing the session via end_session().
+    """
+    from playwright.sync_api import sync_playwright
+
+    if not BB_KEY or not BB_PROJECT:
+        raise RuntimeError(
+            "BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
+
+    # keepAlive so the session survives the Playwright disconnect below and
+    # the live-view URL stays valid for embedding in the frontend.
+    session = create_session(keep_alive=True)
+    sid = session.get("id")
+    connect_url = session.get("connectUrl")
+    if not connect_url:
+        raise RuntimeError(f"Browserbase session has no connectUrl: {session}")
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(connect_url)
+            # Navigate + start playback, then DISCONNECT (do not close the
+            # remote browser — closing would end the session). Dropping the
+            # CDP connection leaves the keepAlive session running on the page.
+            context = (browser.contexts[0] if browser.contexts
+                       else browser.new_context())
+            page = context.pages[0] if context.pages else context.new_page()
+            page.set_viewport_size(
+                {"width": viewport[0], "height": viewport[1]})
+            page.goto(url, wait_until="domcontentloaded",
+                      timeout=nav_timeout_ms)
+            time.sleep(2.0)
+            _try_start_playback(page)
+            # Intentionally NOT calling browser.close().
+    except Exception:
+        if sid:
+            try:
+                end_session(sid)
+            except Exception:
+                pass
+        raise
+
+    return {
+        "session_id":    sid,
+        "connect_url":   connect_url,
+        "live_view_url": live_view_url(sid) if sid else "",
+        "url":           url,
+    }
 
 
 # ── FRAME CAPTURE ─────────────────────────────────────────────────────────────
@@ -87,14 +170,21 @@ def _try_start_playback(page) -> None:
 
 def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
                    viewport=(1280, 720), settle_s: float = 4.0,
-                   nav_timeout_ms: int = 60000):
+                   nav_timeout_ms: int = 60000,
+                   connect_url: str | None = None, navigate: bool = True,
+                   release_session_id: str | None = "__own__"):
     """
     Drive a Browserbase cloud browser to a web page and capture rendered
     frames as BGR numpy arrays (the CrowdPhysics pipeline's frame format).
 
-    Connects to the session's CDP `connectUrl` with Playwright, navigates to
-    `url`, attempts to start any video playback, then screenshots the page at
-    a fixed interval. The session is always released afterwards.
+    Connects to a session's CDP `connectUrl` with Playwright, (optionally)
+    navigates to `url`, starts any video playback, then screenshots the page
+    at a fixed interval.
+
+    By default it creates and releases its own session. To reuse a warm
+    session (e.g. an existing live-view session), pass `connect_url` and set
+    `navigate=False`; pass `release_session_id` to release it afterwards
+    (or None to leave it running).
 
     Returns:
         (frames, fps)  — list[np.ndarray HxWx3 BGR], effective frames-per-sec
@@ -107,11 +197,17 @@ def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
         raise RuntimeError(
             "BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
 
-    session = create_session()
-    sid = session.get("id")
-    connect_url = session.get("connectUrl")
-    if not connect_url:
-        raise RuntimeError(f"Browserbase session has no connectUrl: {session}")
+    own_session = connect_url is None
+    sid_to_release: str | None = None
+    if own_session:
+        session = create_session()
+        sid_to_release = session.get("id")
+        connect_url = session.get("connectUrl")
+        if not connect_url:
+            raise RuntimeError(
+                f"Browserbase session has no connectUrl: {session}")
+    elif release_session_id and release_session_id != "__own__":
+        sid_to_release = release_session_id
 
     frames: list[np.ndarray] = []
     try:
@@ -123,12 +219,16 @@ def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
                 page = context.pages[0] if context.pages else context.new_page()
                 page.set_viewport_size(
                     {"width": viewport[0], "height": viewport[1]})
-                page.goto(url, wait_until="domcontentloaded",
-                          timeout=nav_timeout_ms)
-
-                time.sleep(settle_s)
-                _try_start_playback(page)
-                time.sleep(1.0)
+                if navigate:
+                    page.goto(url, wait_until="domcontentloaded",
+                              timeout=nav_timeout_ms)
+                    time.sleep(settle_s)
+                    _try_start_playback(page)
+                    time.sleep(1.0)
+                else:
+                    # Warm session — page already loaded; just ensure playback.
+                    _try_start_playback(page)
+                    time.sleep(0.5)
 
                 for _ in range(n_frames):
                     png = page.screenshot(type="png")
@@ -140,9 +240,9 @@ def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
             finally:
                 browser.close()
     finally:
-        if sid:
+        if sid_to_release:
             try:
-                end_session(sid)
+                end_session(sid_to_release)
             except Exception:
                 pass
 
