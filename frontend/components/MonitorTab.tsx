@@ -72,10 +72,15 @@ export default function MonitorTab() {
   const [mode, setMode]     = useState<"upload" | "live">("upload");
   const [file, setFile]     = useState<File | null>(null);
   const [liveUrl, setLiveUrl] = useState("https://www.abbeyroad.com/crossing");
+  const [livePreview, setLivePreview] = useState("https://www.abbeyroad.com/crossing");
   const [venue, setVenue]   = useState("Main Stage");
   const [loading, setLoad]  = useState(false);
   const [result, setResult] = useState<MonitorResult | null>(null);
   const [error, setError]   = useState<string | null>(null);
+
+  // Object URL for previewing the uploaded video locally.
+  const objectUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+  useEffect(() => () => { if (objectUrl) URL.revokeObjectURL(objectUrl); }, [objectUrl]);
 
   const canRun = mode === "upload" ? !!file : liveUrl.trim().length > 0;
 
@@ -151,7 +156,7 @@ export default function MonitorTab() {
                 </>
               )}
               <input type="file" accept="video/*" className="hidden"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+                onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }} />
             </label>
           ) : (
             <div className="flex flex-col gap-1.5">
@@ -161,10 +166,18 @@ export default function MonitorTab() {
                 placeholder="https://… (any public camera page)"
                 value={liveUrl}
                 onChange={(e) => setLiveUrl(e.target.value)}
+                onBlur={() => { setLivePreview(liveUrl.trim()); setResult(null); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    setLivePreview(liveUrl.trim());
+                    setResult(null);
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
               />
               <p className="font-mono text-[9px] text-text3 leading-snug">
-                Browserbase opens a cloud browser, captures frames, and runs
-                them through the same physics pipeline. Capture takes ~30–60s.
+                Preview loads in the panel → click <span className="text-teal">Monitor Live</span> to
+                capture frames via Browserbase and analyze (~30–60s).
               </p>
             </div>
           )}
@@ -199,7 +212,7 @@ export default function MonitorTab() {
           <p className="panel-label mb-3">Analysis Pipeline</p>
           <div className="flex flex-col gap-2.5">
             {[
-              "Farneback Optical Flow",
+              "Optical Flow (RAFT / Farneback)",
               "8×8 Grid → 256-dim",
               "CNN Encoder → 64-dim",
               "LSTM World Model",
@@ -210,75 +223,178 @@ export default function MonitorTab() {
         </div>
       </div>
 
-      {/* ── Centre visualisation ────────────────────── */}
-      <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto min-w-0">
+      {/* ── Source (left half) ──────────────────────── */}
+      <div className="flex-1 flex flex-col gap-2 p-4 min-w-0 border-r border-border">
+        <div className="flex items-center justify-between">
+          <p className="panel-label">{mode === "live" ? "Live Source" : "Source Video"}</p>
+          {mode === "live" && livePreview && (
+            <span className="font-mono text-[9px] text-teal flex items-center gap-1.5">
+              <span className="dot-live" /> STREAM
+            </span>
+          )}
+        </div>
 
-        {/* Pressure field */}
-        <div className="card flex-1 relative min-h-80 flex items-center justify-center">
-          {result?.peak_frame_b64 ? (
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`data:image/png;base64,${result.peak_frame_b64}`}
-                alt="Crowd pressure field"
+        <div className="card flex-1 relative flex items-center justify-center overflow-hidden min-h-80 bg-black/40">
+          {mode === "upload" ? (
+            objectUrl ? (
+              <video
+                key={objectUrl}
+                src={objectUrl}
+                controls autoPlay muted loop playsInline
                 className="w-full h-full object-contain animate-fade-in"
               />
-              <div className="absolute top-3 left-3">
-                <div className={STATUS_META[peakStatus]?.badge ?? "badge-neutral"}>
-                  <span className={STATUS_META[peakStatus]?.dot} />
-                  Peak: {STATUS_META[peakStatus]?.label}
-                </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3 text-text3">
+                <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.89L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                <p className="font-mono text-xs">Upload a video to preview it here</p>
               </div>
-              <div className="absolute bottom-3 right-3 font-mono text-[9px] text-text3 bg-void/70 px-2 py-1 rounded">
-                CFD Pressure Field
-              </div>
-            </>
+            )
           ) : (
-            <div className="flex flex-col items-center gap-3 text-text3">
-              {loading ? (
+            livePreview ? (
+              <iframe
+                key={livePreview}
+                src={livePreview}
+                title="Live camera feed"
+                className="w-full h-full border-0 animate-fade-in"
+                allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+              />
+            ) : (
+              <div className="flex flex-col items-center gap-3 text-text3">
+                <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+                </svg>
+                <p className="font-mono text-xs">Enter a stream URL to preview it here</p>
+              </div>
+            )
+          )}
+        </div>
+        {mode === "live" && (
+          <p className="font-mono text-[9px] text-text3 leading-snug">
+            Some sites block embedding — if the preview is blank, the live
+            capture &amp; analysis still works through Browserbase.
+          </p>
+        )}
+      </div>
+
+      {/* ── Analysis (right half) ────────────────────── */}
+      <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto min-w-0">
+        <div className="flex items-center justify-between">
+          <p className="panel-label">Analysis</p>
+          {result?.source && (
+            <span className="font-mono text-[9px] text-teal flex items-center gap-1.5">
+              <span className="dot-live" />
+              {result.source.frames_captured} frames @ {result.source.capture_fps} fps
+            </span>
+          )}
+        </div>
+
+        {!result && !loading ? (
+          /* Empty analysis state */
+          <div className="card flex-1 min-h-80 flex flex-col items-center justify-center gap-3 text-text3">
+            <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+            </svg>
+            <p className="font-mono text-xs text-center px-6">
+              {mode === "live"
+                ? "Click “Monitor Live” to analyze the feed"
+                : "Click “Run Analysis” to analyze this video"}
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Pressure field */}
+            <div className="card relative min-h-72 flex-1 flex items-center justify-center">
+              {result?.peak_frame_b64 ? (
                 <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/png;base64,${result.peak_frame_b64}`}
+                    alt="Crowd pressure field"
+                    className="w-full h-full object-contain animate-fade-in"
+                  />
+                  <div className="absolute top-3 left-3">
+                    <div className={STATUS_META[peakStatus]?.badge ?? "badge-neutral"}>
+                      <span className={STATUS_META[peakStatus]?.dot} />
+                      Peak: {STATUS_META[peakStatus]?.label}
+                    </div>
+                  </div>
+                  <div className="absolute bottom-3 right-3 font-mono text-[9px] text-text3 bg-void/70 px-2 py-1 rounded">
+                    CFD Pressure Field
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col items-center gap-3 text-text3">
                   <span className="spinner" />
                   <p className="font-mono text-xs">
                     {mode === "live" ? "Pulling live frames via Browserbase…" : "Processing frames…"}
                   </p>
-                </>
-              ) : (
-                <>
-                  <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.89L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                  <p className="font-mono text-xs">
-                    {mode === "live" ? "Enter a stream URL and monitor live" : "Upload a video and run analysis"}
+                </div>
+              )}
+            </div>
+
+            {/* Summary bar */}
+            {result && (
+              <div className="card px-4 py-3 animate-fade-in">
+                <p className="panel-label mb-1">Summary</p>
+                <p className="text-sm text-text2 leading-relaxed">{result.summary}</p>
+                {result.source && (
+                  <p className="font-mono text-[9px] text-text3 mt-1 break-all">
+                    Source: {result.source.url}
                   </p>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Summary bar */}
-        {result && (
-          <div className="card px-4 py-3 animate-fade-in">
-            <div className="flex items-center justify-between mb-1">
-              <p className="panel-label">Summary</p>
-              {result.source && (
-                <span className="font-mono text-[9px] text-teal flex items-center gap-1.5">
-                  <span className="dot-live" />
-                  LIVE · {result.source.frames_captured} frames @ {result.source.capture_fps} fps
-                </span>
-              )}
-            </div>
-            <p className="text-sm text-text2 leading-relaxed">{result.summary}</p>
-            {result.source && (
-              <p className="font-mono text-[9px] text-text3 mt-1 break-all">
-                Source: {result.source.url}
-              </p>
+                )}
+              </div>
             )}
-          </div>
-        )}
 
-        {/* Timeline */}
-        {result?.timeline && <Timeline points={result.timeline} />}
+            {/* Timeline */}
+            {result?.timeline && <Timeline points={result.timeline} />}
+
+            {/* Claude */}
+            <div className="card flex flex-col">
+              <div className="panel-header">
+                <p className="panel-label">Situational Awareness</p>
+                <span className="badge-teal text-[9px] px-1.5 py-0.5">Claude</span>
+              </div>
+              <div className="p-4 text-xs text-text2 leading-relaxed">
+                {loading ? (
+                  <div className="space-y-2">
+                    <div className="skeleton h-3 w-full" />
+                    <div className="skeleton h-3 w-5/6" />
+                    <div className="skeleton h-3 w-4/5" />
+                    <div className="skeleton h-3 w-3/4" />
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-wrap">
+                    {result?.claude_briefing ?? "Waiting for analysis…"}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* RL Intervention */}
+            <div className="card flex flex-col">
+              <div className="panel-header">
+                <p className="panel-label">RL Intervention</p>
+                <span className="badge-neutral text-[9px] px-1.5 py-0.5">Policy</span>
+              </div>
+              <div className="p-4 text-xs text-text2 leading-relaxed">
+                {loading ? (
+                  <div className="space-y-2">
+                    <div className="skeleton h-3 w-3/4" />
+                    <div className="skeleton h-3 w-full" />
+                    <div className="skeleton h-3 w-5/6" />
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-wrap">
+                    {result?.rl_explanation ?? "No anomaly detected yet."}
+                  </p>
+                )}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Error */}
         {error && (
@@ -288,54 +404,6 @@ export default function MonitorTab() {
             <p className="font-mono text-xs text-crimson/80">{error}</p>
           </div>
         )}
-      </div>
-
-      {/* ── Right panel ─────────────────────────────── */}
-      <div className="w-64 flex-shrink-0 flex flex-col gap-3 p-4 border-l border-border overflow-y-auto">
-
-        {/* Claude */}
-        <div className="card flex flex-col flex-1 min-h-0">
-          <div className="panel-header">
-            <p className="panel-label">Situational Awareness</p>
-            <span className="badge-teal text-[9px] px-1.5 py-0.5">Claude</span>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 text-xs text-text2 leading-relaxed min-h-0">
-            {loading ? (
-              <div className="space-y-2">
-                <div className="skeleton h-3 w-full" />
-                <div className="skeleton h-3 w-5/6" />
-                <div className="skeleton h-3 w-4/5" />
-                <div className="skeleton h-3 w-full" />
-                <div className="skeleton h-3 w-3/4" />
-              </div>
-            ) : (
-              <p className="whitespace-pre-wrap">
-                {result?.claude_briefing ?? "Waiting for analysis…"}
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* RL Intervention */}
-        <div className="card flex flex-col">
-          <div className="panel-header">
-            <p className="panel-label">RL Intervention</p>
-            <span className="badge-neutral text-[9px] px-1.5 py-0.5">Policy</span>
-          </div>
-          <div className="p-4 text-xs text-text2 leading-relaxed overflow-y-auto max-h-52">
-            {loading ? (
-              <div className="space-y-2">
-                <div className="skeleton h-3 w-3/4" />
-                <div className="skeleton h-3 w-full" />
-                <div className="skeleton h-3 w-5/6" />
-              </div>
-            ) : (
-              <p className="whitespace-pre-wrap">
-                {result?.rl_explanation ?? "No anomaly detected yet."}
-              </p>
-            )}
-          </div>
-        </div>
       </div>
     </div>
   );

@@ -104,10 +104,18 @@ export interface SimulateResult {
   peak_pressure: number;
 }
 
+export interface DiscoverUnknown {
+  dimensions?: number[];
+  separation_z_score?: number;
+  verdict?: string;
+}
+
 export interface DiscoverResult {
   table_md: string;
   hypothesis: string;
   computed?: boolean;
+  latent_dim?: number;
+  unknown?: DiscoverUnknown;
 }
 
 export interface RLTopAction {

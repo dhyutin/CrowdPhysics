@@ -477,6 +477,8 @@ def discover():
         "table_md": probe.get("table_md", _PROBE_FALLBACK["table_md"]),
         "hypothesis": hypothesis,
         "computed": probe.get("computed", False),
+        "latent_dim": probe.get("latent_dim", 64),
+        "unknown": probe.get("unknown", {}),
     }
 
 

@@ -87,24 +87,29 @@ export default function DiscoveryTab() {
           <div className="max-w-2xl">
             <p className="text-sm text-text2 leading-relaxed">
               The world model was <em className="text-text1 not-italic font-medium">never told</em> what physics concepts exist.
-              We probe its 64-dimensional latent space to see what it discovered.
-              Some dimensions map to known physics. One cluster maps to something
-              no crowd scientist has labeled — and it activates{" "}
-              <span className="text-amber font-semibold">4.2 minutes</span> before a crush event.
+              We linear-probe its {result?.latent_dim ?? 64}-dimensional latent space to see what it discovered.
+              Some dimensions map to known physics. Other dimensions are{" "}
+              <span className="text-amber font-semibold">unexplained</span> by any measured concept,
+              yet separate pre-anomaly frames from calm ones.
             </p>
           </div>
           <div className="flex gap-3 flex-shrink-0 ml-6">
             <div className="card-inset px-4 py-3 text-center">
               <p className="kpi-label mb-1">Latent dims</p>
-              <p className="kpi-value text-xl text-teal">64</p>
+              <p className="kpi-value text-xl text-teal">{result?.latent_dim ?? 64}</p>
             </div>
             <div className="card-inset px-4 py-3 text-center">
               <p className="kpi-label mb-1">Unknown signal</p>
-              <p className="kpi-value text-xl text-amber">3.24σ</p>
+              <p className="kpi-value text-xl text-amber">
+                {result?.unknown?.separation_z_score != null
+                  ? `${result.unknown.separation_z_score.toFixed(2)}σ` : "—"}
+              </p>
             </div>
             <div className="card-inset px-4 py-3 text-center">
-              <p className="kpi-label mb-1">Lead time</p>
-              <p className="kpi-value text-xl text-crimson">4.2m</p>
+              <p className="kpi-label mb-1">Source</p>
+              <p className={`kpi-value text-xl ${result?.computed ? "text-emerald" : "text-text3"}`}>
+                {result ? (result.computed ? "real" : "stub") : "—"}
+              </p>
             </div>
           </div>
         </div>
@@ -133,15 +138,26 @@ export default function DiscoveryTab() {
                 <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
               </svg>
               <p className="font-mono text-[10px] text-amber uppercase tracking-widest font-semibold">
-                Unknown Dimensions · [2, 16, 33, 50, 58]
+                Unknown Dimensions · {result?.unknown?.dimensions?.length
+                  ? `[${result.unknown.dimensions.join(", ")}]` : "run probe"}
               </p>
             </div>
             <p className="text-sm text-text2 leading-relaxed">
-              These 5 latent dimensions activate{" "}
-              <strong className="text-text1">3.24σ stronger</strong> in the 4.2 minutes before a crowd crush —
-              before any visible compression, panic, or density change appears.
-              The model discovered a physics primitive that crowd scientists have
-              never named. Claude can hypothesize what it might represent.
+              {result?.unknown?.separation_z_score != null ? (
+                <>
+                  These latent dimensions are unexplained by any measured physics, yet
+                  activate{" "}
+                  <strong className="text-text1">
+                    {result.unknown.separation_z_score.toFixed(2)}σ differently
+                  </strong>{" "}
+                  in high-surprise (pre-anomaly) frames versus calm frames.
+                  The model represents structure that no measured concept captures.
+                  Claude can hypothesize what it might be.
+                </>
+              ) : (
+                <>Run the probe to compute which latent dimensions the model uses that
+                  no measured physics concept explains.</>
+              )}
             </p>
           </div>
 
