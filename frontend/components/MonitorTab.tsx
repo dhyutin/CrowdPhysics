@@ -2,12 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  analyzeVideo,
-  monitorUrl,
+  streamAnalyze,
+  streamMonitorUrl,
   startLiveSession,
   endLiveSession,
   type MonitorResult,
   type TimelinePoint,
+  type Forecast,
+  type CaptureSource,
+  type LiveTick,
 } from "@/lib/api";
 import AgentTrace from "@/components/AgentTrace";
 import ForecastPanel from "@/components/ForecastPanel";
@@ -77,6 +80,57 @@ function PipelineStep({ n, label }: { n: number; label: string }) {
   );
 }
 
+const STATUS_TEXT: Record<string, string> = {
+  SAFE: "#3FB950", WARNING: "#D29922", DANGER: "#F85149", CALIBRATING: "#6E7681",
+};
+
+function LiveStatusBar({
+  now, status, score, processed, total, phase,
+}: {
+  now: number; status: string; score: number;
+  processed: number; total: number; phase: string;
+}) {
+  const color = STATUS_TEXT[status] ?? "#6E7681";
+  const pct = total > 1 ? Math.min(100, Math.round((processed / (total - 1)) * 100)) : 0;
+  const meta = STATUS_META[status] ?? STATUS_META.CALIBRATING;
+  return (
+    <div className="card p-3 animate-fade-in">
+      <div className="flex items-center justify-between mb-2">
+        <span className="font-mono text-[9px] text-crimson flex items-center gap-1.5">
+          <span className="dot-live" /> LIVE
+        </span>
+        <span className="font-mono text-[9px] text-text3">{phase}</span>
+      </div>
+      <div className="flex items-center gap-4">
+        <div className="flex flex-col">
+          <span className="kpi-label">Now</span>
+          <span className="font-mono text-lg text-text1 tabular-nums">
+            T+{now.toFixed(1)}s
+          </span>
+        </div>
+        <div className="flex flex-col">
+          <span className="kpi-label">Status</span>
+          <div className={meta.badge}>
+            <span className={meta.dot} /> {meta.label}
+          </div>
+        </div>
+        <div className="flex flex-col">
+          <span className="kpi-label">Anomaly</span>
+          <span className="font-mono text-lg tabular-nums" style={{ color }}>
+            {score.toFixed(2)}σ
+          </span>
+        </div>
+      </div>
+      <div className="mt-2.5 h-1 rounded-full bg-void/60 overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-200"
+          style={{ width: `${pct}%`, background: color }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function MonitorTab() {
   const [mode, setMode]     = useState<"upload" | "live">("upload");
   const [file, setFile]     = useState<File | null>(null);
@@ -85,6 +139,19 @@ export default function MonitorTab() {
   const [loading, setLoad]  = useState(false);
   const [result, setResult] = useState<MonitorResult | null>(null);
   const [error, setError]   = useState<string | null>(null);
+
+  // Live streaming state (frame-by-frame ticks from the SSE-style stream).
+  const [streaming, setStreaming]   = useState(false);
+  const [liveTicks, setLiveTicks]   = useState<TimelinePoint[]>([]);
+  const [liveForecast, setLiveForecast] = useState<Forecast | null>(null);
+  const [liveStatus, setLiveStatus] = useState("CALIBRATING");
+  const [liveNow, setLiveNow]       = useState(0);
+  const [liveScore, setLiveScore]   = useState(0);
+  const [liveTotal, setLiveTotal]   = useState(0);
+  const [livePhase, setLivePhase]   = useState("");
+  const [liveSource, setLiveSource] = useState<CaptureSource | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // Browserbase live-view preview state.
   const [liveView, setLiveView]       = useState<string | null>(null);
@@ -134,23 +201,93 @@ export default function MonitorTab() {
   }
 
   async function handleRun() {
-    if (!canRun) return;
-    setLoad(true);
+    if (!canRun || streaming) return;
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     setError(null);
+    setResult(null);
+    setLoad(true);
+    setStreaming(true);
+    setLiveTicks([]);
+    setLiveForecast(null);
+    setLiveStatus("CALIBRATING");
+    setLiveNow(0);
+    setLiveScore(0);
+    setLiveTotal(0);
+    setLiveSource(null);
+    setLivePhase(mode === "live"
+      ? "Capturing buffer via Browserbase…" : "Calibrating…");
+
+    let capturedSource: CaptureSource | undefined;
+    const onEvent = (ev: LiveTick) => {
+      switch (ev.type) {
+        case "source":
+          capturedSource = {
+            url: ev.url ?? "",
+            frames_captured: ev.frames_captured ?? 0,
+            capture_fps: ev.capture_fps ?? 0,
+          };
+          setLiveSource(capturedSource);
+          setLivePhase("Streaming live…");
+          break;
+        case "calibrating":
+          setLiveTotal(ev.total_frames ?? 0);
+          setLiveStatus("CALIBRATING");
+          setLivePhase("Streaming live…");
+          break;
+        case "tick": {
+          const pt: TimelinePoint = {
+            time: ev.time ?? 0,
+            status: (ev.status ?? "SAFE") as TimelinePoint["status"],
+            score: ev.score ?? 0,
+            probability: ev.probability ?? 0,
+          };
+          setLiveTicks((prev) => {
+            const next = [...prev, pt];
+            return next.length > 180 ? next.slice(next.length - 180) : next;
+          });
+          setLiveNow(pt.time);
+          setLiveStatus(pt.status);
+          setLiveScore(pt.score);
+          if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
+          break;
+        }
+        case "done":
+          setResult({
+            peak_frame_b64: ev.peak_frame_b64 ?? null,
+            flow_gif_b64: ev.flow_gif_b64 ?? null,
+            summary: ev.summary ?? "",
+            claude_briefing: ev.claude_briefing ?? "",
+            rl_explanation: ev.rl_explanation ?? "",
+            timeline: ev.timeline ?? [],
+            peak_physics: ev.peak_physics ?? null,
+            forecast: ev.forecast ?? null,
+            agent_trace: ev.agent_trace ?? [],
+            source: capturedSource,
+          });
+          if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
+          setLivePhase("Complete");
+          break;
+      }
+    };
+
     try {
       if (mode === "upload") {
-        setResult(await analyzeVideo(file!, venue));
+        await streamAnalyze(file!, venue, onEvent, ac.signal);
       } else {
-        const r = await monitorUrl(
-          liveUrl.trim(), venue || "Live Camera", 35, liveSession ?? undefined);
-        setResult(r);
+        await streamMonitorUrl(
+          liveUrl.trim(), venue || "Live Camera", onEvent, 35,
+          liveSession ?? undefined, ac.signal);
         // The warm session was consumed by the capture.
         setLiveSession(null);
         setLiveView(null);
       }
     } catch (e: unknown) {
-      setError(String(e));
+      if (!ac.signal.aborted) setError(String(e));
     } finally {
+      setStreaming(false);
       setLoad(false);
     }
   }
@@ -161,10 +298,10 @@ export default function MonitorTab() {
   const handleRunRef = useRef(handleRun);
   handleRunRef.current = handleRun;
   useEffect(() => {
-    if (!autoRefresh || mode !== "live" || loading || !result) return;
+    if (!autoRefresh || mode !== "live" || loading || streaming || !result) return;
     const id = setTimeout(() => handleRunRef.current(), 30000);
     return () => clearTimeout(id);
-  }, [autoRefresh, mode, loading, result]);
+  }, [autoRefresh, mode, loading, streaming, result]);
 
   const peakStatus = result?.timeline?.reduce((worst, p) => {
     const rank = { DANGER: 3, WARNING: 2, SAFE: 1, CALIBRATING: 0 };
@@ -385,15 +522,20 @@ export default function MonitorTab() {
       <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto min-w-0">
         <div className="flex items-center justify-between">
           <p className="panel-label">Analysis</p>
-          {result?.source && (
+          {streaming ? (
+            <span className="font-mono text-[9px] text-crimson flex items-center gap-1.5">
+              <span className="dot-live" />
+              {liveTicks.length}{liveTotal ? `/${liveTotal}` : ""} frames
+            </span>
+          ) : result?.source ? (
             <span className="font-mono text-[9px] text-teal flex items-center gap-1.5">
               <span className="dot-live" />
               {result.source.frames_captured} frames @ {result.source.capture_fps} fps
             </span>
-          )}
+          ) : null}
         </div>
 
-        {!result && !loading ? (
+        {!result && !loading && !streaming ? (
           /* Empty analysis state */
           <div className="card flex-1 min-h-80 flex flex-col items-center justify-center gap-3 text-text3">
             <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
@@ -407,6 +549,18 @@ export default function MonitorTab() {
           </div>
         ) : (
           <>
+            {/* Live status bar — only while streaming */}
+            {streaming && (
+              <LiveStatusBar
+                now={liveNow}
+                status={liveStatus}
+                score={liveScore}
+                processed={liveTicks.length}
+                total={liveTotal}
+                phase={livePhase}
+              />
+            )}
+
             {/* Flow-statistics field (animated) */}
             <div className="card relative min-h-72 flex-1 flex items-center justify-center">
               {result?.flow_gif_b64 || result?.peak_frame_b64 ? (
@@ -435,11 +589,33 @@ export default function MonitorTab() {
                     )}
                   </div>
                 </>
+              ) : streaming && liveForecast?.projected_field_b64 ? (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/png;base64,${liveForecast.projected_field_b64}`}
+                    alt="Imagined crowd pressure field"
+                    className="w-full h-full object-contain animate-fade-in"
+                  />
+                  <div className="absolute top-3 left-3">
+                    <div className={STATUS_META[liveStatus]?.badge ?? "badge-neutral"}>
+                      <span className={STATUS_META[liveStatus]?.dot} />
+                      {STATUS_META[liveStatus]?.label ?? "Live"}
+                    </div>
+                  </div>
+                  <div className="absolute bottom-3 right-3 font-mono text-[9px] text-text3 bg-void/70 px-2 py-1 rounded flex items-center gap-1.5">
+                    <span className="dot-live" /> Imagined field · +{liveForecast.horizon_s}s
+                  </div>
+                </>
               ) : (
                 <div className="flex flex-col items-center gap-3 text-text3">
                   <span className="spinner" />
                   <p className="font-mono text-xs">
-                    {mode === "live" ? "Pulling live frames via Browserbase…" : "Processing frames…"}
+                    {streaming
+                      ? (livePhase || "Streaming live…")
+                      : mode === "live"
+                        ? "Pulling live frames via Browserbase…"
+                        : "Processing frames…"}
                   </p>
                 </div>
               )}
@@ -458,13 +634,17 @@ export default function MonitorTab() {
               </div>
             )}
 
-            {/* Forecast — potential future of the crowd */}
-            {result?.forecast && !result.forecast.error && (
-              <ForecastPanel forecast={result.forecast} />
-            )}
+            {/* Forecast — potential future of the crowd (rolling while live) */}
+            {(() => {
+              const fc = result?.forecast ?? liveForecast;
+              return fc && !fc.error ? <ForecastPanel forecast={fc} /> : null;
+            })()}
 
-            {/* Timeline */}
-            {result?.timeline && <Timeline points={result.timeline} />}
+            {/* Timeline — grows bar-by-bar while streaming */}
+            {(() => {
+              const pts = streaming && !result ? liveTicks : result?.timeline;
+              return pts && pts.length ? <Timeline points={pts} /> : null;
+            })()}
 
             {/* Agent trace */}
             {result?.agent_trace && result.agent_trace.length > 0 && (
@@ -478,7 +658,13 @@ export default function MonitorTab() {
                 <span className="badge-teal text-[9px] px-1.5 py-0.5">Claude</span>
               </div>
               <div className="p-4 text-xs text-text2 leading-relaxed">
-                {loading ? (
+                {result ? (
+                  <p className="whitespace-pre-wrap">{result.claude_briefing}</p>
+                ) : streaming ? (
+                  <p className="font-mono text-[11px] text-text3 italic">
+                    Live analysis in progress — Claude briefs the operator on completion…
+                  </p>
+                ) : loading ? (
                   <div className="space-y-2">
                     <div className="skeleton h-3 w-full" />
                     <div className="skeleton h-3 w-5/6" />
@@ -486,9 +672,7 @@ export default function MonitorTab() {
                     <div className="skeleton h-3 w-3/4" />
                   </div>
                 ) : (
-                  <p className="whitespace-pre-wrap">
-                    {result?.claude_briefing ?? "Waiting for analysis…"}
-                  </p>
+                  <p className="whitespace-pre-wrap">Waiting for analysis…</p>
                 )}
               </div>
             </div>
@@ -500,16 +684,22 @@ export default function MonitorTab() {
                 <span className="badge-neutral text-[9px] px-1.5 py-0.5">Policy</span>
               </div>
               <div className="p-4 text-xs text-text2 leading-relaxed">
-                {loading ? (
+                {result ? (
+                  <p className="whitespace-pre-wrap">
+                    {result.rl_explanation || "No anomaly detected yet."}
+                  </p>
+                ) : streaming ? (
+                  <p className="font-mono text-[11px] text-text3 italic">
+                    Policy recommendation resolves on completion…
+                  </p>
+                ) : loading ? (
                   <div className="space-y-2">
                     <div className="skeleton h-3 w-3/4" />
                     <div className="skeleton h-3 w-full" />
                     <div className="skeleton h-3 w-5/6" />
                   </div>
                 ) : (
-                  <p className="whitespace-pre-wrap">
-                    {result?.rl_explanation ?? "No anomaly detected yet."}
-                  </p>
+                  <p className="whitespace-pre-wrap">No anomaly detected yet.</p>
                 )}
               </div>
             </div>

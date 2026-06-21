@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,7 @@ import numpy as np
 import torch
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 # ── resolve project root so we can import sibling modules ─────────────────────
@@ -65,6 +66,15 @@ _load_env_file(ROOT / ".env")
 # Anthropic client). Auto-instruments every Claude call.
 from instrumentation import setup_tracing
 setup_tracing()
+
+# OpenTelemetry tracer for the live inference loop. After setup_tracing() this
+# is the Arize-registered provider; if Arize creds are absent it's a harmless
+# no-op tracer, so spans are always safe to open.
+try:
+    from opentelemetry import trace as _otel_trace
+    _TRACER = _otel_trace.get_tracer("crowdphysics.live")
+except Exception:
+    _TRACER = None
 
 from flow_extractor import (
     extract_flow,
@@ -175,7 +185,8 @@ def _numpy_clean(obj: Any) -> Any:
 
 
 def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
-                     fps: float, horizon_steps: int = 36) -> dict | None:
+                     fps: float, horizon_steps: int = 36,
+                     render_field: bool = True) -> dict | None:
     """
     'Potential future of crowds' — roll the world model forward in latent space
     from the most recent observed state and project the crowd's risk trajectory.
@@ -229,31 +240,37 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
         proj_status = ("DANGER" if worst >= 66 else
                        "WARNING" if worst >= 40 else "SAFE")
 
-        # Render the projected (imagined) pressure field at its worst moment by
-        # reconstructing a coarse flow field from the decoded means.
-        wf = dec[worst_i].reshape(8, 8, 4)
-        flow_small = np.zeros((8, 8, 2), dtype=np.float32)
-        flow_small[:, :, 0] = wf[:, :, 0]
-        flow_small[:, :, 1] = wf[:, :, 1]
-        flow_big = cv2.resize(flow_small, (640, 480),
-                              interpolation=cv2.INTER_CUBIC) * 6.0
-        proj_state = {"status": proj_status,
-                      "score": round(worst / 40.0, 2),
-                      "probability": worst / 100.0,
-                      "turbulence": float(np.abs(wf[:, :, 3]).mean()),
-                      "backward_flow": 0.0, "boundary_stress": 0.0,
-                      "mean_speed": float(np.abs(wf[:, :, 2]).mean())}
-        field, _ = render_pressure_field(flow_big, proj_state,
-                                         frame_shape=(480, 640))
-
-        return {
-            "points":              points,
-            "lead_time_s":         lead,
-            "horizon_s":           round(horizon_steps / max(fps, 1e-3), 1),
-            "projected_status":    proj_status,
-            "projected_risk":      round(worst, 1),
-            "projected_field_b64": _frame_to_b64(field),
+        result = {
+            "points":           points,
+            "lead_time_s":      lead,
+            "horizon_s":        round(horizon_steps / max(fps, 1e-3), 1),
+            "projected_status": proj_status,
+            "projected_risk":   round(worst, 1),
         }
+
+        # Rendering the imagined pressure field is the heavy part; in the live
+        # stream we skip it on most ticks (render_field=False) and keep only the
+        # cheap risk curve + lead-time, rendering the field occasionally.
+        if render_field:
+            # Reconstruct a coarse flow field from the decoded means at the
+            # worst projected moment and render it.
+            wf = dec[worst_i].reshape(8, 8, 4)
+            flow_small = np.zeros((8, 8, 2), dtype=np.float32)
+            flow_small[:, :, 0] = wf[:, :, 0]
+            flow_small[:, :, 1] = wf[:, :, 1]
+            flow_big = cv2.resize(flow_small, (640, 480),
+                                  interpolation=cv2.INTER_CUBIC) * 6.0
+            proj_state = {"status": proj_status,
+                          "score": round(worst / 40.0, 2),
+                          "probability": worst / 100.0,
+                          "turbulence": float(np.abs(wf[:, :, 3]).mean()),
+                          "backward_flow": 0.0, "boundary_stress": 0.0,
+                          "mean_speed": float(np.abs(wf[:, :, 2]).mean())}
+            field, _ = render_pressure_field(flow_big, proj_state,
+                                             frame_shape=(480, 640))
+            result["projected_field_b64"] = _frame_to_b64(field)
+
+        return result
     except Exception as exc:  # forecast is best-effort; never break analysis
         return {"error": str(exc)}
 
@@ -423,6 +440,238 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
     }
 
 
+# ── STREAMING ANALYSIS ────────────────────────────────────────────────────────
+
+# How often (in frames) to re-roll the world-model forecast during streaming,
+# and how often within that to also render the (heavier) imagined field.
+FORECAST_EVERY = int(os.environ.get("STREAM_FORECAST_EVERY", "5"))
+FIELD_EVERY_FORECASTS = 3
+# Wall-clock pacing so the stream ticks like a live clock rather than as fast as
+# the CPU can churn. Capped so fast machines still look "live", not instant.
+STREAM_PACE_FPS = float(os.environ.get("STREAM_PACE_FPS", "12"))
+
+
+def _ndjson(obj: Any) -> str:
+    """Serialize one streaming event as a newline-delimited JSON line."""
+    return json.dumps(_numpy_clean(obj)) + "\n"
+
+
+def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
+    """
+    Streaming twin of `_analyze_frames`: yields newline-delimited JSON events so
+    the Monitor UI updates live instead of waiting for the whole clip.
+
+    Event types:
+      {"type":"calibrating", ...}   once, after the calm baseline is set
+      {"type":"tick", time, status, score, probability, [forecast]}  per frame
+      {"type":"done", summary, claude_briefing, rl_explanation, timeline,
+                      peak_physics, forecast, peak_frame_b64, flow_gif_b64,
+                      agent_trace}  once, at the end
+
+    The `forecast` attached every FORECAST_EVERY frames is a fresh roll-forward
+    of the world model from the CURRENT moment — so the projected future updates
+    live as "now" advances.
+    """
+    span_cm = (_TRACER.start_as_current_span("live_inference_stream")
+               if _TRACER is not None else None)
+    if span_cm is not None:
+        span_cm.__enter__()
+
+    try:
+        _detector.buf.clear()
+
+        # ── CALIBRATION on the opening (assumed calm) frames ──────────────────
+        cal_feats = []
+        for i in range(1, min(len(frames), 61)):
+            f = extract_flow(cv2.resize(frames[i - 1], (320, 240)),
+                             cv2.resize(frames[i], (320, 240)))
+            cal_feats.append(flow_to_features(f))
+        if cal_feats:
+            _detector.calibrated = False
+            _detector.calibrate([np.array(cal_feats)])
+        _detector.buf.clear()
+        yield _ndjson({"type": "calibrating", "venue": venue,
+                       "fps": round(float(fps), 2),
+                       "calibration_frames": len(cal_feats),
+                       "total_frames": len(frames)})
+
+        timeline: list = []
+        feat_history: list = []
+        field_frames: list = []
+        peak_flow = None
+        peak_score = -999.0
+        peak_physics = None
+        last_forecast = None
+        forecast_count = 0
+        GIF_STRIDE = 2
+        GIF_MAX_FRAMES = 80
+        target_dt = 1.0 / max(STREAM_PACE_FPS, 1.0)
+
+        # ── DETECTION PASS (streamed) ─────────────────────────────────────────
+        prev_frame = frames[0]
+        for step, curr in enumerate(frames[1:]):
+            t0 = time.time()
+            sm_curr = cv2.resize(curr, (320, 240))
+            sm_prev = cv2.resize(prev_frame, (320, 240))
+
+            flow = extract_flow(sm_prev, sm_curr)
+            features = flow_to_features(flow)
+            feat_history.append(features)
+            physics = _detector.process_frame(features)
+
+            point = {
+                "time":        round(step / fps, 1),
+                "status":      physics["status"],
+                "score":       physics["score"],
+                "probability": round(physics["probability"] * 100, 1),
+            }
+            timeline.append(point)
+
+            if step % GIF_STRIDE == 0 and len(field_frames) < GIF_MAX_FRAMES:
+                f_img, _ = render_pressure_field(
+                    flow, physics, frame_shape=(240, 320))
+                field_frames.append(cv2.cvtColor(f_img, cv2.COLOR_BGR2RGB))
+
+            if physics["score"] > peak_score:
+                peak_score = physics["score"]
+                peak_flow = flow
+                peak_physics = {k: v for k, v in physics.items()
+                                if k != "z_latent"}
+
+            tick = {"type": "tick", "step": step, **point}
+
+            # Rolling forecast: re-roll the world model forward from now.
+            if (physics["status"] != "CALIBRATING"
+                    and step % FORECAST_EVERY == 0 and len(feat_history) >= 5):
+                forecast_count += 1
+                render_field = (physics["status"] == "DANGER"
+                                or forecast_count % FIELD_EVERY_FORECASTS == 0)
+                fc = _forecast_future(feat_history,
+                                      physics.get("probability", 0.0), fps,
+                                      render_field=render_field)
+                if fc and not fc.get("error"):
+                    last_forecast = fc
+                    tick["forecast"] = fc
+
+            yield _ndjson(tick)
+            prev_frame = curr
+
+            # Pace to wall-clock so it reads as live.
+            dt = time.time() - t0
+            if dt < target_dt:
+                time.sleep(target_dt - dt)
+
+        # ── FINALIZE ──────────────────────────────────────────────────────────
+        peak_frame = None
+        if peak_flow is not None:
+            peak_frame, _ = render_pressure_field(
+                peak_flow, peak_physics, frame_shape=(480, 640))
+        flow_gif_b64 = _frames_to_gif_b64(field_frames, fps=12.0)
+
+        danger_n = sum(1 for p in timeline if p["status"] == "DANGER")
+        total = len(timeline)
+        first_danger = next(
+            (p["time"] for p in timeline if p["status"] == "DANGER"), None)
+        if first_danger is not None:
+            summary = (f"DANGER at T+{first_danger}s | "
+                       f"Peak: {peak_score:.2f} | "
+                       f"Dangerous: {danger_n}/{total} frames")
+        else:
+            summary = (f"No crush risk | Peak: {peak_score:.2f} | "
+                       f"Analyzed {total} frames")
+
+        # Claude + RL once at the end (keeps the live pacing snappy).
+        last_claude, last_rl, did_claude = "Calibrating...", "", False
+        try:
+            if peak_physics:
+                last_claude = interpret_live(peak_physics, venue=venue)
+                did_claude = True
+                if peak_physics.get("intervention"):
+                    last_rl = explain_rl_decision(
+                        peak_physics["intervention"], peak_physics)
+        except Exception as exc:
+            last_claude = f"Claude error: {exc}"
+
+        # A final forecast WITH the imagined field rendered for the end state.
+        final_forecast = last_forecast
+        try:
+            ff = _forecast_future(
+                feat_history, (peak_physics or {}).get("probability", 0.0),
+                fps, render_field=True)
+            if ff and not ff.get("error"):
+                final_forecast = ff
+        except Exception:
+            pass
+
+        trace = [
+            {"agent": "Calibration Agent", "icon": "calibrate",
+             "action": "Established calm baseline",
+             "detail": f"{len(cal_feats)} opening frames used as normal reference",
+             "status": "ok"},
+            {"agent": "World Model", "icon": "brain",
+             "action": "Encoded crowd into latent physics",
+             "detail": f"{total} frames → 64-D self-supervised state space",
+             "status": "ok"},
+            {"agent": "Anomaly Detector", "icon": "pulse",
+             "action": "Scored crush risk per frame (live)",
+             "detail": (f"peak {peak_score:.2f}σ · "
+                        f"{danger_n}/{total} frames flagged danger"),
+             "status": "danger" if danger_n else "ok"},
+        ]
+        if final_forecast and not final_forecast.get("error"):
+            lead = final_forecast.get("lead_time_s")
+            trace.append({
+                "agent": "Forecast Engine", "icon": "forecast",
+                "action": "Projected the crowd's near future",
+                "detail": (f"{final_forecast['horizon_s']}s horizon · "
+                           + (f"danger in ~{lead}s" if lead
+                              else "no crush projected")),
+                "status": "danger" if lead else "ok"})
+        if did_claude:
+            first_line = (last_claude.split("\n", 1)[0]
+                          if isinstance(last_claude, str) else "")
+            trace.append({
+                "agent": "Claude · Situational Awareness", "icon": "claude",
+                "action": "Briefed the operator",
+                "detail": first_line[:120], "status": "ok"})
+        if last_rl:
+            iv = (peak_physics or {}).get("intervention") or {}
+            trace.append({
+                "agent": "RL Policy", "icon": "shield",
+                "action": "Recommended an intervention",
+                "detail": iv.get("action_name", "intervention selected"),
+                "status": "ok"})
+
+        if span_cm is not None:
+            try:
+                span = _otel_trace.get_current_span()
+                span.set_attribute("crowdphysics.total_frames", total)
+                span.set_attribute("crowdphysics.danger_frames", danger_n)
+                span.set_attribute("crowdphysics.peak_score", float(peak_score))
+            except Exception:
+                pass
+
+        yield _ndjson({
+            "type":            "done",
+            "summary":         summary,
+            "claude_briefing": last_claude,
+            "rl_explanation":  last_rl,
+            "timeline":        timeline[-60:],
+            "peak_physics":    peak_physics,
+            "forecast":        final_forecast,
+            "peak_frame_b64":  (_frame_to_b64(peak_frame)
+                                if peak_frame is not None else None),
+            "flow_gif_b64":    flow_gif_b64,
+            "agent_trace":     trace,
+        })
+    finally:
+        if span_cm is not None:
+            try:
+                span_cm.__exit__(None, None, None)
+            except Exception:
+                pass
+
+
 # ── GET /api/health ───────────────────────────────────────────────────────────
 
 @app.get("/api/health")
@@ -479,6 +728,48 @@ async def analyze(
         os.unlink(tmp_path)
 
     return JSONResponse(_numpy_clean(result))
+
+
+# ── POST /api/analyze_stream ──────────────────────────────────────────────────
+
+_STREAM_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
+@app.post("/api/analyze_stream")
+async def analyze_stream(
+    video: UploadFile = File(...),
+    venue: str        = Form(default="Main Stage"),
+):
+    """
+    Streaming twin of /api/analyze: emits newline-delimited JSON events
+    (calibrating / tick / done) so the Monitor UI ticks frame-by-frame with a
+    forecast that re-rolls from the current moment. Frames are decoded fully
+    into memory first (so the temp file is released before streaming begins).
+    """
+    suffix = Path(video.filename).suffix or ".mp4"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await video.read())
+        tmp_path = tmp.name
+
+    try:
+        cap = cv2.VideoCapture(tmp_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        frames: list = []
+        while len(frames) < 500:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frames.append(frame)
+        cap.release()
+    finally:
+        os.unlink(tmp_path)
+
+    if len(frames) < 2:
+        raise HTTPException(status_code=400, detail="Cannot read video")
+
+    return StreamingResponse(
+        _analyze_frames_stream(frames, fps=fps, venue=venue),
+        media_type="application/x-ndjson", headers=_STREAM_HEADERS)
 
 
 # ── LIVE-VIEW SESSIONS (Browserbase) ──────────────────────────────────────────
@@ -608,6 +899,61 @@ def monitor_url(req: MonitorURLRequest):
         "capture_fps":     round(fps, 2),
     }
     return JSONResponse(_numpy_clean(result))
+
+
+# ── POST /api/monitor_url_stream ──────────────────────────────────────────────
+
+@app.post("/api/monitor_url_stream")
+def monitor_url_stream(req: MonitorURLRequest):
+    """
+    Streaming twin of /api/monitor_url. Browserbase fills a short frame buffer
+    once (~30-60s), then we stream the analysis of that buffer at real-time
+    pace while the frontend's live-view iframe shows the genuinely-live video.
+
+    Emits a leading {"type":"source", ...} event, then the same calibrating /
+    tick / done events as /api/analyze_stream.
+    """
+    if not _bb_ready():
+        raise HTTPException(
+            status_code=400,
+            detail="BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
+
+    try:
+        from agents.browserbase_monitor import capture_frames
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Browserbase capture unavailable: {exc}")
+
+    n_frames = max(2, min(req.n_frames, 120))
+    warm = _live_sessions.get(req.session_id) if req.session_id else None
+
+    try:
+        if warm:
+            frames, fps = capture_frames(
+                req.url, n_frames=n_frames,
+                connect_url=warm["connect_url"], navigate=False,
+                release_session_id=req.session_id)
+            _live_sessions.pop(req.session_id, None)
+        else:
+            frames, fps = capture_frames(req.url, n_frames=n_frames)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Browserbase capture failed: {exc}")
+
+    if len(frames) < 2:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Captured only {len(frames)} frame(s) from {req.url}")
+
+    def gen():
+        yield _ndjson({"type": "source", "url": req.url,
+                       "frames_captured": len(frames),
+                       "capture_fps": round(float(fps), 2)})
+        yield from _analyze_frames_stream(frames, fps=fps, venue=req.venue)
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson",
+                             headers=_STREAM_HEADERS)
 
 
 # ── POST /api/simulate ────────────────────────────────────────────────────────

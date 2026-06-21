@@ -58,6 +58,113 @@ export async function monitorUrl(
   return res.json();
 }
 
+// ── Live streaming (newline-delimited JSON over a fetch ReadableStream) ──────
+//
+// EventSource can't POST a file or JSON body, so we stream the response body
+// of a normal POST and parse one JSON event per line. Each event is a LiveTick.
+
+export type LiveEventType = "source" | "calibrating" | "tick" | "done";
+
+export interface LiveTick {
+  type: LiveEventType;
+  // tick
+  step?: number;
+  time?: number;
+  status?: TimelinePoint["status"];
+  score?: number;
+  probability?: number;
+  forecast?: Forecast;
+  // calibrating
+  venue?: string;
+  fps?: number;
+  calibration_frames?: number;
+  total_frames?: number;
+  // source (live capture)
+  url?: string;
+  frames_captured?: number;
+  capture_fps?: number;
+  // done
+  summary?: string;
+  claude_briefing?: string;
+  rl_explanation?: string;
+  timeline?: TimelinePoint[];
+  peak_physics?: Record<string, unknown> | null;
+  peak_frame_b64?: string | null;
+  flow_gif_b64?: string | null;
+  agent_trace?: AgentTraceStep[];
+}
+
+async function consumeStream(
+  res: Response,
+  onEvent: (ev: LiveTick) => void
+): Promise<void> {
+  if (!res.ok || !res.body) {
+    const msg = await res.text().catch(() => res.statusText);
+    throw new Error(msg || `stream failed (${res.status})`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  const flushLines = (final = false) => {
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) {
+        try { onEvent(JSON.parse(line) as LiveTick); } catch { /* skip */ }
+      }
+    }
+    if (final) {
+      const tail = buf.trim();
+      if (tail) {
+        try { onEvent(JSON.parse(tail) as LiveTick); } catch { /* skip */ }
+      }
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    flushLines();
+  }
+  buf += decoder.decode();
+  flushLines(true);
+}
+
+export async function streamAnalyze(
+  file: File,
+  venue: string,
+  onEvent: (ev: LiveTick) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const form = new FormData();
+  form.append("video", file);
+  form.append("venue", venue);
+  const res = await fetch(`${BASE}/api/analyze_stream`, {
+    method: "POST",
+    body: form,
+    signal,
+  });
+  await consumeStream(res, onEvent);
+}
+
+export async function streamMonitorUrl(
+  url: string,
+  venue: string,
+  onEvent: (ev: LiveTick) => void,
+  nFrames = 35,
+  sessionId?: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/monitor_url_stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, venue, n_frames: nFrames, session_id: sessionId ?? null }),
+    signal,
+  });
+  await consumeStream(res, onEvent);
+}
+
 export async function runSimulation(
   payload: SimulatePayload
 ): Promise<SimulateResult> {
