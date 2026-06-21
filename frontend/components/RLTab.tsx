@@ -1,3 +1,8 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { runRLMetrics, type RLMetricsResult } from "@/lib/api";
+
 const ACTIONS = [
   { id: "A0", name: "monitor",          effect: "No change to crowd dynamics",              cost: 0.0, risk: "low"  },
   { id: "A1", name: "increase_egress",  effect: "Dampen y-axis compression",                cost: 0.1, risk: "low"  },
@@ -36,6 +41,120 @@ function ConceptCard({ title, body, tag }: { title: string; body: string; tag: s
   );
 }
 
+function LiveResults() {
+  const [data, setData] = useState<RLMetricsResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    runRLMetrics().then(setData).catch((e) => setError(String(e)));
+  }, []);
+
+  if (error) {
+    return (
+      <div className="card border border-amber/30 px-4 py-3"
+        style={{ background: "rgba(210,153,34,0.05)" }}>
+        <p className="font-mono text-[11px] text-amber">
+          Live RL metrics unavailable — start the backend to load them. ({error})
+        </p>
+      </div>
+    );
+  }
+  if (!data) {
+    return <div className="card p-5"><div className="skeleton h-40 w-full" /></div>;
+  }
+
+  const best = data.summary?.best ?? {};
+  const final = data.summary?.final ?? {};
+  const sample = data.live_sample;
+  const maxAbsQ = sample
+    ? Math.max(...Object.values(sample.q_values).map((q) => Math.abs(q)), 1)
+    : 1;
+
+  return (
+    <div>
+      <SectionHeader title="Live Training Results"
+        sub="Real metrics from the trained policy — not illustrative" />
+      <div className="grid grid-cols-2 gap-4">
+
+        {/* Curve */}
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <p className="panel-label">Dyna-CQL Training Curves</p>
+            <span className="badge-teal text-[9px] px-1.5 py-0.5">
+              {data.rl_policy_loaded ? "rl_policy.pt" : "no checkpoint"}
+            </span>
+          </div>
+          {data.curve_b64 ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={`data:image/png;base64,${data.curve_b64}`}
+              alt="RL training curves"
+              className="w-full rounded border border-border" />
+          ) : (
+            <p className="font-mono text-[11px] text-text3">
+              No curve yet — run train_rl.py to generate logs/.
+            </p>
+          )}
+          <div className="grid grid-cols-3 gap-2 mt-3">
+            {[
+              { l: "Best reward", v: best.avg_reward_50?.toFixed(1) ?? "—" },
+              { l: "Final loss", v: final.loss?.toFixed(2) ?? "—" },
+              { l: "Episodes", v: data.summary?.n_steps ?? "—" },
+            ].map(({ l, v }) => (
+              <div key={l} className="card-inset px-2 py-2 text-center">
+                <p className="kpi-label mb-0.5">{l}</p>
+                <p className="kpi-value text-sm text-teal">{v}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Live Q-values */}
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <p className="panel-label">Live Policy Readout</p>
+            <span className="badge-neutral text-[9px] px-1.5 py-0.5">sampled state</span>
+          </div>
+          {sample && !sample.error ? (
+            <>
+              <p className="text-xs text-text2 mb-3">
+                On a sampled elevated crowd state, the policy recommends{" "}
+                <span className="font-mono text-teal">{sample.action_name}</span>{" "}
+                ({(sample.confidence * 100).toFixed(0)}% confidence).
+              </p>
+              <div className="space-y-1.5">
+                {Object.entries(sample.q_values)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([name, q]) => {
+                    const w = (Math.abs(q) / maxAbsQ) * 100;
+                    const best = name === sample.action_name;
+                    return (
+                      <div key={name} className="flex items-center gap-2">
+                        <span className={`font-mono text-[10px] w-28 truncate ${best ? "text-teal" : "text-text3"}`}>
+                          {name}
+                        </span>
+                        <div className="flex-1 h-3 rounded bg-raised/40 overflow-hidden">
+                          <div className={`h-full ${q >= 0 ? "bg-teal/60" : "bg-crimson/50"}`}
+                            style={{ width: `${w}%` }} />
+                        </div>
+                        <span className="font-mono text-[10px] text-text3 w-12 text-right">
+                          {q.toFixed(2)}
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </>
+          ) : (
+            <p className="font-mono text-[11px] text-text3">
+              Policy readout unavailable{sample?.error ? ` (${sample.error})` : ""}.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RLTab() {
   return (
     <div className="h-full overflow-y-auto">
@@ -70,6 +189,9 @@ export default function RLTab() {
             </div>
           </div>
         </div>
+
+        {/* Live training results (real) */}
+        <LiveResults />
 
         {/* Why CQL + Why Dyna */}
         <div>

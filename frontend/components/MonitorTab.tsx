@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { analyzeVideo, monitorUrl, type MonitorResult, type TimelinePoint } from "@/lib/api";
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
@@ -107,31 +107,67 @@ export default function MonitorTab() {
       {/* ── Left controls ──────────────────────────── */}
       <div className="w-52 flex-shrink-0 flex flex-col gap-3 p-4 border-r border-border overflow-y-auto">
 
-        {/* Upload */}
+        {/* Feed source */}
         <div className="card p-4 flex flex-col gap-3">
           <p className="panel-label">Video Feed</p>
 
-          <label className={`upload-zone h-28 gap-1.5 ${file ? "has-file" : ""}`}>
-            {file ? (
-              <div className="flex flex-col items-center gap-1 px-2">
-                <svg className="w-5 h-5 text-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.89L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-                <span className="text-teal text-center text-[11px] break-all px-1 leading-tight">{file.name}</span>
-                <span className="text-text3 text-[9px]">{(file.size / 1e6).toFixed(1)} MB</span>
-              </div>
-            ) : (
-              <>
-                <svg className="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-                </svg>
-                <span className="font-medium">Upload video</span>
-                <span className="text-[9px] text-text3">.mp4, .mov, .avi</span>
-              </>
-            )}
-            <input type="file" accept="video/*" className="hidden"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-          </label>
+          {/* Source toggle */}
+          <div className="grid grid-cols-2 gap-1 p-1 rounded-lg border border-border bg-void/40">
+            {([
+              { id: "upload", label: "Upload" },
+              { id: "live",   label: "Live URL" },
+            ] as const).map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => setMode(id)}
+                className={`font-mono text-[10px] py-1.5 rounded-md transition-all ${
+                  mode === id
+                    ? "bg-teal/15 text-teal border border-teal/25"
+                    : "text-text3 hover:text-text2 border border-transparent"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {mode === "upload" ? (
+            <label className={`upload-zone h-28 gap-1.5 ${file ? "has-file" : ""}`}>
+              {file ? (
+                <div className="flex flex-col items-center gap-1 px-2">
+                  <svg className="w-5 h-5 text-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.89L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  <span className="text-teal text-center text-[11px] break-all px-1 leading-tight">{file.name}</span>
+                  <span className="text-text3 text-[9px]">{(file.size / 1e6).toFixed(1)} MB</span>
+                </div>
+              ) : (
+                <>
+                  <svg className="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                  </svg>
+                  <span className="font-medium">Upload video</span>
+                  <span className="text-[9px] text-text3">.mp4, .mov, .avi</span>
+                </>
+              )}
+              <input type="file" accept="video/*" className="hidden"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            </label>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <label className="field-label">Live stream / webcam URL</label>
+              <input
+                className="input text-xs"
+                placeholder="https://… (any public camera page)"
+                value={liveUrl}
+                onChange={(e) => setLiveUrl(e.target.value)}
+              />
+              <p className="font-mono text-[9px] text-text3 leading-snug">
+                Browserbase opens a cloud browser, captures frames, and runs
+                them through the same physics pipeline. Capture takes ~30–60s.
+              </p>
+            </div>
+          )}
 
           <div>
             <label className="field-label">Venue / Location</label>
@@ -145,11 +181,13 @@ export default function MonitorTab() {
 
           <button
             className="btn-primary w-full"
-            disabled={!file || loading}
-            onClick={handleAnalyze}
+            disabled={!canRun || loading}
+            onClick={handleRun}
           >
             {loading ? (
-              <><span className="spinner-white" /> Analyzing…</>
+              <><span className="spinner-white" /> {mode === "live" ? "Capturing…" : "Analyzing…"}</>
+            ) : mode === "live" ? (
+              <><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 12.5A5.5 5.5 0 118 2.5a5.5 5.5 0 010 11z" opacity="0.5"/></svg> Monitor Live</>
             ) : (
               <><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16"><path d="M6 3l8 5-8 5V3z"/></svg> Run Analysis</>
             )}
@@ -200,14 +238,18 @@ export default function MonitorTab() {
               {loading ? (
                 <>
                   <span className="spinner" />
-                  <p className="font-mono text-xs">Processing frames…</p>
+                  <p className="font-mono text-xs">
+                    {mode === "live" ? "Pulling live frames via Browserbase…" : "Processing frames…"}
+                  </p>
                 </>
               ) : (
                 <>
                   <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.89L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                   </svg>
-                  <p className="font-mono text-xs">Upload a video and run analysis</p>
+                  <p className="font-mono text-xs">
+                    {mode === "live" ? "Enter a stream URL and monitor live" : "Upload a video and run analysis"}
+                  </p>
                 </>
               )}
             </div>
@@ -217,8 +259,21 @@ export default function MonitorTab() {
         {/* Summary bar */}
         {result && (
           <div className="card px-4 py-3 animate-fade-in">
-            <p className="panel-label mb-1">Summary</p>
+            <div className="flex items-center justify-between mb-1">
+              <p className="panel-label">Summary</p>
+              {result.source && (
+                <span className="font-mono text-[9px] text-teal flex items-center gap-1.5">
+                  <span className="dot-live" />
+                  LIVE · {result.source.frames_captured} frames @ {result.source.capture_fps} fps
+                </span>
+              )}
+            </div>
             <p className="text-sm text-text2 leading-relaxed">{result.summary}</p>
+            {result.source && (
+              <p className="font-mono text-[9px] text-text3 mt-1 break-all">
+                Source: {result.source.url}
+              </p>
+            )}
           </div>
         )}
 

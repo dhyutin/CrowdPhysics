@@ -101,8 +101,17 @@ def extract_raft_flow(frame1, frame2,
 
 
 # ─── BACKEND SELECTOR ─────────────────────────────────────────────────────────
+# Default: RAFT on GPU/MPS (uses the fine-tuned weights), Farneback on CPU.
+# Override with env CROWDPHYSICS_FLOW_BACKEND=raft|farneback — e.g. force
+# 'farneback' for a fast local demo, or 'raft' to require neural flow.
 
-FLOW_BACKEND = "raft" if (DEVICE.type in ("cuda", "mps")) else "farneback"
+import os as _os
+
+_env_backend = _os.environ.get("CROWDPHYSICS_FLOW_BACKEND", "").strip().lower()
+if _env_backend in ("raft", "farneback"):
+    FLOW_BACKEND = _env_backend
+else:
+    FLOW_BACKEND = "raft" if (DEVICE.type in ("cuda", "mps")) else "farneback"
 
 
 def extract_flow(frame1, frame2,

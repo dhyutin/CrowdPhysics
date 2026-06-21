@@ -37,7 +37,12 @@ sys.path.insert(0, str(ROOT))
 from instrumentation import setup_tracing
 setup_tracing()
 
-from flow_extractor import extract_farneback_flow, flow_to_features, render_pressure_field
+from flow_extractor import (
+    extract_flow,
+    extract_farneback_flow,
+    flow_to_features,
+    render_pressure_field,
+)
 from world_model import CrowdWorldModel
 from dyna_trainer import DynaTrainer
 from anomaly_detector import CrowdPhysicsDetector
@@ -124,6 +129,19 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
     """
     _detector.buf.clear()
 
+    # ── CALIBRATION ──────────────────────────────────────────────────────────
+    # Establish the anomaly baseline on the opening frames (assumed calm) so the
+    # σ-above-baseline score is real instead of the uncalibrated error*50 fallback.
+    cal_feats = []
+    for i in range(1, min(len(frames), 61)):
+        f = extract_flow(cv2.resize(frames[i - 1], (320, 240)),
+                         cv2.resize(frames[i], (320, 240)))
+        cal_feats.append(flow_to_features(f))
+    if cal_feats:
+        _detector.calibrated = False
+        _detector.calibrate([np.array(cal_feats)])
+    _detector.buf.clear()
+
     timeline: list = []
     peak_frame = None
     peak_score = -999.0
@@ -137,7 +155,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
         sm_curr = cv2.resize(curr, (320, 240))
         sm_prev = cv2.resize(prev_frame, (320, 240))
 
-        flow = extract_farneback_flow(sm_prev, sm_curr)
+        flow = extract_flow(sm_prev, sm_curr)
         features = flow_to_features(flow)
         physics = _detector.process_frame(features)
 
@@ -402,63 +420,105 @@ def simulate(req: SimulateRequest):
 
 # ── GET /api/discover ─────────────────────────────────────────────────────────
 
+_PROBE_PATH = ROOT / "probe_results.json"
+
+# Fallback used only if probe_latent.py hasn't been run (clearly marked).
+_PROBE_FALLBACK = {
+    "latent_dim": 64,
+    "computed": False,
+    "concepts": {
+        "crowd_velocity":   {"r2": 0.0, "top_dimensions": [],
+                             "description": "Mean crowd movement speed"},
+        "turbulence":       {"r2": 0.0, "top_dimensions": [],
+                             "description": "Chaotic motion intensity"},
+        "backward_pressure": {"r2": 0.0, "top_dimensions": [],
+                              "description": "Crowd moving against primary flow"},
+        "boundary_stress":  {"r2": 0.0, "top_dimensions": [],
+                             "description": "Compression at walls and barriers"},
+    },
+    "unknown": {"dimensions": [], "separation_z_score": 0.0,
+                "verdict": "Run probe_latent.py to compute real values"},
+    "table_md": ("| Concept | R² | Key Dimensions | Status |\n|---|---|---|---|\n"
+                 "| _probe not yet computed_ | — | — | run `probe_latent.py` |"),
+}
+
+
 @app.get("/api/discover")
 def discover():
     """
-    Probe the world model's latent space and ask Claude to name
-    what it discovered.
-
-    Returns:
-      table_md        markdown table of discovered physics concepts
-      hypothesis      Claude's hypothesis for the unknown dimensions
+    Return the REAL linear-probe of the world model's latent space (computed
+    by probe_latent.py → probe_results.json) and Claude's hypothesis for the
+    unexplained dimensions. Falls back to a clearly-marked placeholder if the
+    probe hasn't been run yet.
     """
-    probe = {
-        "latent_dim": 64,
-        "crowd_velocity": {
-            "r2": 0.89, "top_dimensions": [12, 47, 3, 28, 51],
-            "description": "Mean crowd movement speed",
-        },
-        "turbulence": {
-            "r2": 0.84, "top_dimensions": [23, 8, 55, 19, 42],
-            "description": "Chaotic motion intensity",
-        },
-        "backward_pressure": {
-            "r2": 0.78, "top_dimensions": [34, 19, 61, 7, 44],
-            "description": "Crowd moving against primary flow direction",
-        },
-        "boundary_stress": {
-            "r2": 0.71, "top_dimensions": [44, 7, 29, 63, 15],
-            "description": "Compression at walls and barriers",
-        },
-        "unknown": {
-            "dimensions":             [2, 16, 33, 50, 58],
-            "normal_mean_activation": 0.041,
-            "crush_mean_activation":  0.847,
-            "separation_z_score":     3.24,
-            "lead_time_minutes":      4.2,
-            "verdict": "PRE-CRUSH SIGNAL — 4.2min lead, 3.24σ separation",
-        },
+    if _PROBE_PATH.exists():
+        with open(_PROBE_PATH) as f:
+            probe = json.load(f)
+    else:
+        probe = _PROBE_FALLBACK
+
+    # Claude receives the computed concepts + unknown dims.
+    claude_probe = {
+        "latent_dim": probe.get("latent_dim", 64),
+        **probe.get("concepts", {}),
+        "unknown": probe.get("unknown", {}),
     }
-
-    table_md = """| Concept | R² | Key Dimensions | Status |
-|---|---|---|---|
-| Crowd Velocity | **0.89** | [12, 47, 3] | ✅ Discovered |
-| Turbulence | **0.84** | [23, 8, 55] | ✅ Discovered |
-| Backward Pressure | **0.78** | [34, 19, 61] | ✅ Discovered |
-| Boundary Stress | **0.71** | [44, 7, 29] | ✅ Discovered |
-| **UNKNOWN** | — | **[2, 16, 33, 50, 58]** | ⭐ **3.24σ Pre-Crush Signal** |"""
-
     try:
-        hypothesis = name_discovered_physics(probe)
+        hypothesis = name_discovered_physics(claude_probe)
     except Exception as exc:
         hypothesis = (
             f"(Claude unavailable: {exc})\n\n"
-            "These unknown dimensions likely encode pre-turbulent pressure "
+            "The unexplained dimensions likely encode pre-turbulent pressure "
             "fluctuation — the transition from laminar to turbulent crowd "
             "flow that precedes catastrophic compression."
         )
 
-    return {"table_md": table_md, "hypothesis": hypothesis}
+    return {
+        "table_md": probe.get("table_md", _PROBE_FALLBACK["table_md"]),
+        "hypothesis": hypothesis,
+        "computed": probe.get("computed", False),
+    }
+
+
+# ── GET /api/rl_metrics ───────────────────────────────────────────────────────
+
+@app.get("/api/rl_metrics")
+def rl_metrics():
+    """
+    Real RL policy artifacts for the RL tab:
+      summary       latest training summary (reward/loss/episodes)
+      curve_b64     base64 PNG of the training curves (if available)
+      live_sample   live Q-values from the loaded policy on a sampled
+                    elevated crowd state (demonstrates the trained network)
+    """
+    import glob
+
+    summary, curve_b64 = None, None
+    runs = sorted(glob.glob(str(ROOT / "logs" / "rl_policy_*")))
+    if runs:
+        latest = Path(runs[-1])
+        s_path, p_path = latest / "summary.json", latest / "curves.png"
+        if s_path.exists():
+            with open(s_path) as f:
+                summary = json.load(f)
+        if p_path.exists():
+            curve_b64 = base64.b64encode(p_path.read_bytes()).decode()
+
+    # Live readout: ask the trained policy what it would do in an elevated state.
+    live_sample = None
+    try:
+        torch.manual_seed(7)
+        z = torch.randn(64) * 1.5
+        live_sample = _trainer.get_intervention(z.numpy())
+    except Exception as exc:
+        live_sample = {"error": str(exc)}
+
+    return JSONResponse(_numpy_clean({
+        "summary": summary,
+        "curve_b64": curve_b64,
+        "live_sample": live_sample,
+        "rl_policy_loaded": _rl_path.exists(),
+    }))
 
 
 # ── RUN LOCALLY ───────────────────────────────────────────────────────────────
