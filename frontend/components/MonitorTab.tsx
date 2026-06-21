@@ -9,11 +9,13 @@ import {
   type MonitorResult,
   type TimelinePoint,
   type Forecast,
+  type Trend,
   type CaptureSource,
   type LiveTick,
 } from "@/lib/api";
 import AgentTrace from "@/components/AgentTrace";
 import ForecastPanel from "@/components/ForecastPanel";
+import TrendPanel from "@/components/TrendPanel";
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
   SAFE:        { badge: "badge-safe",    dot: "dot-live",    label: "Safe" },
@@ -144,6 +146,7 @@ export default function MonitorTab() {
   const [streaming, setStreaming]   = useState(false);
   const [liveTicks, setLiveTicks]   = useState<TimelinePoint[]>([]);
   const [liveForecast, setLiveForecast] = useState<Forecast | null>(null);
+  const [liveTrend, setLiveTrend]   = useState<Trend | null>(null);
   const [liveStatus, setLiveStatus] = useState("CALIBRATING");
   const [liveNow, setLiveNow]       = useState(0);
   const [liveScore, setLiveScore]   = useState(0);
@@ -212,6 +215,7 @@ export default function MonitorTab() {
     setStreaming(true);
     setLiveTicks([]);
     setLiveForecast(null);
+    setLiveTrend(null);
     setLiveStatus("CALIBRATING");
     setLiveNow(0);
     setLiveScore(0);
@@ -252,6 +256,7 @@ export default function MonitorTab() {
           setLiveStatus(pt.status);
           setLiveScore(pt.score);
           if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
+          if (ev.trend) setLiveTrend(ev.trend);
           break;
         }
         case "done":
@@ -264,10 +269,12 @@ export default function MonitorTab() {
             timeline: ev.timeline ?? [],
             peak_physics: ev.peak_physics ?? null,
             forecast: ev.forecast ?? null,
+            trend: ev.trend ?? null,
             agent_trace: ev.agent_trace ?? [],
             source: capturedSource,
           });
           if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
+          if (ev.trend) setLiveTrend(ev.trend);
           setLivePhase("Complete");
           break;
       }
@@ -638,6 +645,14 @@ export default function MonitorTab() {
             {(() => {
               const fc = result?.forecast ?? liveForecast;
               return fc && !fc.error ? <ForecastPanel forecast={fc} /> : null;
+            })()}
+
+            {/* Minutes-ahead risk outlook (statistical trend projection) */}
+            {(() => {
+              const tr = result?.trend ?? liveTrend;
+              return tr && tr.points && tr.points.length > 1 ? (
+                <TrendPanel trend={tr} />
+              ) : null;
             })()}
 
             {/* Timeline — grows bar-by-bar while streaming */}

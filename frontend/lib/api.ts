@@ -74,6 +74,7 @@ export interface LiveTick {
   score?: number;
   probability?: number;
   forecast?: Forecast;
+  trend?: Trend;
   // calibrating
   venue?: string;
   fps?: number;
@@ -246,6 +247,17 @@ export interface Forecast {
   error?: string;
 }
 
+// Minutes-ahead statistical trend projection (NOT the world-model rollout).
+export interface Trend {
+  points?: ForecastPoint[];
+  lead_time_s?: number | null;
+  horizon_s?: number;
+  projected_status?: "SAFE" | "WARNING" | "DANGER";
+  projected_risk?: number;
+  slope_per_min?: number;
+  method?: string;
+}
+
 export interface AgentTraceStep {
   agent: string;
   icon: string;
@@ -263,6 +275,7 @@ export interface AnalyzeResult {
   timeline: TimelinePoint[];
   peak_physics: Record<string, unknown> | null;
   forecast?: Forecast | null;
+  trend?: Trend | null;
   agent_trace?: AgentTraceStep[];
 }
 

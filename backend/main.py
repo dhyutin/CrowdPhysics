@@ -275,6 +275,61 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
         return {"error": str(exc)}
 
 
+# Minutes-ahead projection knobs (statistical trend, NOT the world-model rollout).
+TREND_HORIZON_S = float(os.environ.get("FORECAST_TREND_HORIZON_S", "180"))
+TREND_STEP_S = float(os.environ.get("FORECAST_TREND_STEP_S", "10"))
+TREND_FIT_WINDOW_S = float(os.environ.get("FORECAST_TREND_FIT_WINDOW_S", "60"))
+
+
+def _project_trend(timeline: list, horizon_s: float = TREND_HORIZON_S,
+                   step_s: float = TREND_STEP_S) -> dict | None:
+    """
+    Minutes-ahead risk projection by extrapolating the observed risk *trend*.
+
+    This is deliberately NOT the world-model latent rollout (which is reliable
+    only seconds out). It fits a line to the recent per-frame risk and projects
+    it minutes ahead, so it is honest statistical extrapolation — labelled
+    method="trend" so the UI can present it as such. Captures the slow density
+    build-up that precedes a crush, which the fine-grained rollout cannot reach.
+    """
+    pts = [p for p in timeline if p.get("status") != "CALIBRATING"]
+    if len(pts) < 8:
+        return None
+
+    t = np.array([p["time"] for p in pts], dtype=float)
+    y = np.array([p["probability"] for p in pts], dtype=float)  # risk %, 0-100
+    t_now = float(t[-1])
+
+    # Smooth out per-frame jitter before fitting the slope.
+    k = max(1, len(y) // 12)
+    if k > 1:
+        y = np.convolve(y, np.ones(k) / k, mode="same")
+
+    mask = t >= (t_now - TREND_FIT_WINDOW_S)
+    tf, yf = (t[mask], y[mask]) if mask.sum() >= 4 else (t, y)
+    slope, intercept = np.polyfit(tf, yf, 1)          # %/s, %
+    cur = float(np.clip(intercept + slope * t_now, 1.0, 99.0))
+
+    points, worst = [], cur
+    for i in range(1, max(1, round(horizon_s / step_s)) + 1):
+        tau = i * step_s
+        risk = float(np.clip(cur + slope * tau, 1.0, 99.0))
+        points.append({"t": round(tau, 1), "risk": round(risk, 1)})
+        worst = max(worst, risk)
+
+    lead = next((p["t"] for p in points if p["risk"] >= 66.0), None)
+    status = "DANGER" if worst >= 66 else "WARNING" if worst >= 40 else "SAFE"
+    return {
+        "points":           points,
+        "lead_time_s":      lead,
+        "horizon_s":        round(horizon_s, 1),
+        "projected_status": status,
+        "projected_risk":   round(worst, 1),
+        "slope_per_min":    round(float(slope) * 60.0, 2),
+        "method":           "trend",
+    }
+
+
 def _calibrate(frames: list[np.ndarray]) -> int:
     """
     Establish the anomaly baseline on the opening (assumed calm) frames so the
@@ -433,6 +488,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
     # ── FORECAST: imagine the next frames in latent space ────────────────────
     cur_prob = (peak_physics.get("probability", 0.0) if peak_physics else 0.0)
     forecast = _forecast_future(feat_history, cur_prob, fps)
+    trend = _project_trend(timeline)
 
     trace = _build_trace(cal_n, timeline, peak_score, forecast,
                          last_claude, did_claude, last_rl, peak_physics)
@@ -446,6 +502,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
         "timeline":        timeline[-60:],
         "peak_physics":    peak_physics,
         "forecast":        forecast,
+        "trend":           trend,
         "agent_trace":     trace,
     }
 
@@ -551,6 +608,9 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
                 if fc and not fc.get("error"):
                     last_forecast = fc
                     tick["forecast"] = fc
+                tr = _project_trend(timeline)
+                if tr:
+                    tick["trend"] = tr
 
             yield _ndjson(tick)
             prev_frame = curr
@@ -613,6 +673,7 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
             "timeline":        timeline[-60:],
             "peak_physics":    peak_physics,
             "forecast":        final_forecast,
+            "trend":           _project_trend(timeline),
             "peak_frame_b64":  (_frame_to_b64(peak_frame)
                                 if peak_frame is not None else None),
             "flow_gif_b64":    flow_gif_b64,
