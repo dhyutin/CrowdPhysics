@@ -4,6 +4,7 @@ Phase 3b: Dyna Training Loop
 RL inside the world model. No real disasters needed.
 """
 
+import math
 import torch
 import torch.nn as nn
 import numpy as np
@@ -47,7 +48,13 @@ class DynaTrainer:
         self.step = 0
         self.epsilon = 1.0    # exploration rate
         self.eps_min = 0.05
-        self.eps_decay = 0.995
+        self.eps_decay = 0.995  # recomputed per-run in run_dyna_training()
+
+        # Per-dimension RMS normalizer so the danger score is order-1
+        # regardless of latent_dim. Without this, norm(z) for a 64-dim
+        # latent is ~8x, which sits far above the 0.8/3.5/4.5 thresholds
+        # below — every episode would start past "crush" and never learn.
+        self._danger_norm = math.sqrt(latent_dim)
 
     # ── DANGER SIGNAL ─────────────────────────────────────────────────────────
 
@@ -55,11 +62,13 @@ class DynaTrainer:
         """
         How dangerous is this latent crowd state?
 
-        We use L2 norm from origin because the world model
-        is trained such that normal states cluster near origin.
-        Anomalous states push further out.
+        Per-dimension RMS distance from origin: norm(z) / sqrt(latent_dim).
+        The world model is trained so normal states cluster near origin;
+        anomalous states push further out. Normalizing by sqrt(dim) keeps
+        the score order-1 (a unit-variance latent scores ~1.0) so the
+        0.8 / 3.5 / 4.5 reward thresholds are meaningful.
         """
-        return float(torch.norm(z, dim=-1).mean())
+        return float(torch.norm(z, dim=-1).mean()) / self._danger_norm
 
     # ── ACTION EFFECTS ────────────────────────────────────────────────────────
 
@@ -101,14 +110,26 @@ class DynaTrainer:
 
     # ── EPISODE GENERATION ────────────────────────────────────────────────────
 
-    def generate_episode(self, z_start=None, episode_len=40):
+    def generate_episode(self, z_start=None, episode_len=40, progress=0.5):
         """
         Generate one synthetic crowd scenario inside the world model.
         Returns list of (action, danger_before, danger_after, reward).
+
+        Args:
+            progress: training progress in [0, 1]. Drives a curriculum —
+                early episodes start mostly from calm states so the policy
+                can learn the basic "intervene → danger drops" signal before
+                being thrown into near-unrecoverable crush scenarios.
         """
         if z_start is None:
-            danger_level = np.random.choice([0.3, 0.8, 1.5, 2.5],
-                                            p=[0.3, 0.3, 0.25, 0.15])
+            levels = [0.3, 0.8, 1.5, 2.5]
+            if progress < 0.33:        # warm-up: mostly calm
+                probs = [0.50, 0.30, 0.15, 0.05]
+            elif progress < 0.66:      # mid: balanced
+                probs = [0.30, 0.30, 0.25, 0.15]
+            else:                      # late: heavier on hard scenarios
+                probs = [0.20, 0.25, 0.30, 0.25]
+            danger_level = np.random.choice(levels, p=probs)
             z_start = torch.randn(1, self.latent_dim) * danger_level
 
         z = z_start
@@ -156,6 +177,11 @@ class DynaTrainer:
 
             action_cost = [0, 0.1, 0.1, 0.3, 0.2, 0.2, 1.0][action]
             reward -= action_cost
+
+            # Clip per-step reward to keep TD targets in a sane range.
+            # Without this, a single bad step (-15 crush penalty) dominates
+            # the return and gives the bimodal, non-converging curves we saw.
+            reward = float(np.clip(reward, -15.0, 15.0))
             # ──────────────────────────────────────────────────────────────
 
             done = float(danger_after > 4.5)
@@ -223,13 +249,24 @@ class DynaTrainer:
         Args:
             logger: optional MetricsLogger — logs per-episode reward/loss curves.
         """
+        # Adaptive ε decay: anneal from 1.0 → eps_min over ~80% of training,
+        # so the policy still has runway to exploit at the chosen ε floor.
+        # (The old fixed 0.995 left ε at ~0.22 after 300 episodes — barely
+        # any exploitation — and decayed far too slowly for long runs.)
+        self.epsilon = 1.0
+        anneal_episodes = max(1, int(n_episodes * 0.8))
+        self.eps_decay = (self.eps_min) ** (1.0 / anneal_episodes)
+
         print(f"\nDyna-CQL Training: {n_episodes} episodes")
+        print(f"  ε decay/episode={self.eps_decay:.5f} "
+              f"(→ {self.eps_min} by ep {anneal_episodes})")
         print("=" * 40)
         all_rewards = []
         all_losses = []
 
         for ep in range(n_episodes):
-            episode = self.generate_episode()
+            progress = ep / max(1, n_episodes - 1)
+            episode = self.generate_episode(progress=progress)
             ep_reward = sum(t[3] for t in episode)
             all_rewards.append(ep_reward)
 

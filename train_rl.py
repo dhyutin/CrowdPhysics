@@ -18,11 +18,13 @@ from metrics_logger import MetricsLogger
 
 HIDDEN_DIM = int(os.environ.get("WM_HIDDEN_DIM", "512"))
 N_LAYERS = int(os.environ.get("WM_N_LAYERS", "3"))
-N_EPISODES = int(os.environ.get("RL_EPISODES", "300"))
+N_EPISODES = int(os.environ.get("RL_EPISODES", "8000"))
+STEPS_PER_EPISODE = int(os.environ.get("RL_STEPS_PER_EPISODE", "10"))
 
 # Dyna runs entirely on CPU (latent-space loop + small Q-net; DynaTrainer uses
 # numpy on CPU tensors). The GPU is not needed here.
-print(f"[train_rl] hidden={HIDDEN_DIM} layers={N_LAYERS} episodes={N_EPISODES}")
+print(f"[train_rl] hidden={HIDDEN_DIM} layers={N_LAYERS} "
+      f"episodes={N_EPISODES} steps/ep={STEPS_PER_EPISODE}")
 
 wm = CrowdWorldModel(hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS)
 wm.load_state_dict(torch.load("models/world_model.pt", map_location="cpu"))
@@ -30,10 +32,13 @@ wm.eval()
 print("[train_rl] ✓ world model loaded")
 
 log = MetricsLogger("rl_policy", config={
-    "hidden_dim": HIDDEN_DIM, "n_layers": N_LAYERS, "episodes": N_EPISODES})
+    "hidden_dim": HIDDEN_DIM, "n_layers": N_LAYERS,
+    "episodes": N_EPISODES, "steps_per_episode": STEPS_PER_EPISODE})
 
 trainer = DynaTrainer(wm)
-trainer.run_dyna_training(n_episodes=N_EPISODES, logger=log)
+trainer.run_dyna_training(n_episodes=N_EPISODES,
+                          steps_per_episode=STEPS_PER_EPISODE,
+                          logger=log)
 
 os.makedirs("models", exist_ok=True)
 torch.save(trainer.q_net.state_dict(), "models/rl_policy.pt")

@@ -32,17 +32,22 @@ def get_device():
 
 DEVICE = get_device()
 
-# Scale epochs/batch to available hardware.
-# NOTE: HIDDEN_DIM/N_LAYERS are pinned to the CrowdWorldModel defaults (256/2)
-# because backend/main.py loads checkpoints with those defaults — a
-# larger architecture here would save a state_dict that fails to load there.
-HIDDEN_DIM, N_LAYERS = 256, 2
+# Architecture MUST match what loads the checkpoint downstream:
+# backend/main.py and train_rl.py both build CrowdWorldModel(512, 3).
+# Saving a different size here produces a state_dict that fails to load.
+# Override via WM_HIDDEN_DIM / WM_N_LAYERS only if you change BOTH places too.
+HIDDEN_DIM = int(os.environ.get("WM_HIDDEN_DIM", "512"))
+N_LAYERS = int(os.environ.get("WM_N_LAYERS", "3"))
+
+# Scale epochs/batch to available hardware. EPOCHS is env-overridable
+# (WM_EPOCHS) so you can crank a longer run on the GPU box.
 if DEVICE.type == "cuda":
-    EPOCHS, SEQ_LEN, BATCH_SIZE = 500, 50, 8
+    _default_epochs, SEQ_LEN, BATCH_SIZE = 500, 50, 8
 elif DEVICE.type == "mps":
-    EPOCHS, SEQ_LEN, BATCH_SIZE = 300, 50, 4
+    _default_epochs, SEQ_LEN, BATCH_SIZE = 300, 50, 4
 else:
-    EPOCHS, SEQ_LEN, BATCH_SIZE = 80,  30, 1
+    _default_epochs, SEQ_LEN, BATCH_SIZE = 80, 30, 1
+EPOCHS = int(os.environ.get("WM_EPOCHS", str(_default_epochs)))
 
 print(f"[train] Hyperparams: epochs={EPOCHS}, seq_len={SEQ_LEN}, "
       f"batch={BATCH_SIZE}, hidden={HIDDEN_DIM}, layers={N_LAYERS}")
