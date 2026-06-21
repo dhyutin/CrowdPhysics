@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+anthropic
+torch
+torchvision
+opencv-python-headless
+numpy<2
+Pillow

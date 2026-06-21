@@ -1,0 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+body {
+  background: #060a12;
+  color: #e2e8f4;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  .display { font-family: 'Space Grotesk', sans-serif; }
+
+  .card {
+    @apply bg-surface border border-border rounded-md overflow-hidden;
+  }
+  .card-label {
+    @apply font-mono text-[10px] tracking-widest text-text3 uppercase;
+  }
+  .btn-primary {
+    @apply bg-teal text-void font-semibold px-4 py-2 rounded-md
+           hover:brightness-110 transition-all text-sm;
+  }
+  .btn-secondary {
+    @apply bg-surface border border-border text-text1 px-4 py-2 rounded-md
+           hover:bg-raised transition-all text-sm;
+  }
+
+  .status-safe    { @apply text-emerald border-emerald; }
+  .status-warning { @apply text-amber border-amber; }
+  .status-danger  { @apply text-crimson border-crimson; }
+}
+
+@keyframes pulse-pill {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(220,38,38,0); }
+}
+.danger-pulse { animation: pulse-pill 1s ease infinite; }
+
+::-webkit-scrollbar       { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #060a12; }
+::-webkit-scrollbar-thumb { background: #1a2840; border-radius: 2px; }
