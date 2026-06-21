@@ -8,18 +8,23 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        void:    "#060a12",
-        ground:  "#080e1a",
-        surface: "#0f1a2e",
-        raised:  "#132030",
-        border:  "#1a2840",
-        amber:   "#f59e0b",
-        crimson: "#dc2626",
-        teal:    "#0ea5e9",
-        emerald: "#10b981",
-        text1:   "#e2e8f4",
-        text2:   "#8a9ab8",
-        text3:   "#4a5878",
+        // Backgrounds — neutral charcoal (no blue tint)
+        void:    "#0D1117",
+        ground:  "#10151D",
+        surface: "#161B22",
+        raised:  "#1C2230",
+        border:  "#21262D",
+
+        // Accent / status
+        teal:    "#4493F8",   // professional blue (primary CTA)
+        emerald: "#3FB950",   // safe green
+        amber:   "#D29922",   // warning amber
+        crimson: "#F85149",   // danger red
+
+        // Typography
+        text1:   "#E6EDF3",
+        text2:   "#8B949E",
+        text3:   "#656D76",
       },
       fontFamily: {
         display: ["Space Grotesk", "system-ui", "sans-serif"],
@@ -31,7 +36,7 @@ const config: Config = {
         xl: "14px",
       },
       animation: {
-        "fade-in": "fade-in 0.2s ease-out",
+        "fade-in":  "fade-in 0.2s ease-out",
         "spin-fast": "spin 0.6s linear infinite",
       },
       keyframes: {

@@ -78,13 +78,13 @@ export default function Home() {
 
       {/* ── Sidebar ─────────────────────────────────── */}
       <aside className="w-52 flex-shrink-0 flex flex-col border-r border-border"
-        style={{ background: "linear-gradient(180deg, #080e1a 0%, #060a12 100%)" }}>
+        style={{ background: "linear-gradient(180deg, #10151D 0%, #0D1117 100%)" }}>
 
         {/* Logo */}
         <div className="px-4 py-4 border-b border-border">
           <div className="flex items-center gap-2.5 mb-1">
             <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-              style={{ background: "linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%)", boxShadow: "0 0 12px rgba(14,165,233,0.3)" }}>
+              style={{ background: "linear-gradient(135deg, #4493F8 0%, #1F6FEB 100%)", boxShadow: "0 0 12px rgba(68,147,248,0.3)" }}>
               <span className="font-mono text-[10px] font-bold text-white">CP</span>
             </div>
             <div>
@@ -109,7 +109,7 @@ export default function Home() {
                       ? "text-teal border border-teal/20"
                       : "text-text2 hover:text-text1 border border-transparent hover:border-border"
                   }`}
-                  style={isActive ? { background: "rgba(14,165,233,0.08)" } : {}}
+                  style={isActive ? { background: "rgba(68,147,248,0.08)" } : {}}
                 >
                   <span className={`flex-shrink-0 transition-colors ${isActive ? "text-teal" : "text-text3 group-hover:text-text2"}`}>
                     {icon}
@@ -156,7 +156,7 @@ export default function Home() {
 
         {/* Topbar */}
         <header className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0"
-          style={{ background: "linear-gradient(90deg, #080e1a 0%, #060a12 100%)" }}>
+          style={{ background: "linear-gradient(90deg, #10151D 0%, #0D1117 100%)" }}>
           <div>
             <h1 className="display font-semibold text-text1 text-base leading-tight">{current.label}</h1>
             <p className="text-xs text-text3 mt-0.5">{current.desc}</p>

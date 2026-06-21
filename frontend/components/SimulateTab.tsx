@@ -205,7 +205,7 @@ export default function SimulateTab() {
               </div>
               {/* colour legend */}
               <div className="absolute top-3 right-3 flex flex-col gap-1 bg-void/80 px-2 py-2 rounded">
-                {[["void", "#060a12"], ["low", "#0ea5e9"], ["med", "#f59e0b"], ["high", "#dc2626"]].map(([l, c]) => (
+                {[["void", "#0D1117"], ["low", "#4493F8"], ["med", "#D29922"], ["high", "#F85149"]].map(([l, c]) => (
                   <div key={l} className="flex items-center gap-1.5">
                     <span className="w-3 h-2 rounded-sm flex-shrink-0" style={{ background: c }} />
                     <span className="font-mono text-[8px] text-text3 capitalize">{l}</span>
@@ -244,7 +244,7 @@ export default function SimulateTab() {
 
         {error && (
           <div className="card border border-crimson/30 px-4 py-3 animate-fade-in"
-            style={{ background: "rgba(220,38,38,0.05)" }}>
+            style={{ background: "rgba(248,81,73,0.05)" }}>
             <p className="font-mono text-[10px] text-crimson uppercase tracking-wider mb-1">Error</p>
             <p className="font-mono text-xs text-crimson/80">{error}</p>
           </div>

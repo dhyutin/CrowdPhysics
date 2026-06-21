@@ -43,7 +43,7 @@ export default function RLTab() {
 
         {/* Architecture header */}
         <div className="rounded-xl border border-border p-5"
-          style={{ background: "linear-gradient(135deg, rgba(14,165,233,0.06) 0%, rgba(14,165,233,0.02) 100%)" }}>
+          style={{ background: "linear-gradient(135deg, rgba(68,147,248,0.06) 0%, rgba(68,147,248,0.02) 100%)" }}>
           <div className="flex items-start justify-between">
             <div>
               <p className="font-mono text-[10px] text-teal uppercase tracking-widest mb-1">Architecture</p>
@@ -94,7 +94,7 @@ export default function RLTab() {
           <div className="card overflow-hidden">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-border" style={{ background: "rgba(6,10,18,0.4)" }}>
+                <tr className="border-b border-border" style={{ background: "rgba(13,17,23,0.4)" }}>
                   {["ID", "Primitive", "Physics Effect", "Cost"].map((h) => (
                     <th key={h} className="px-4 py-2.5 text-left font-mono text-[9px] text-text3 uppercase tracking-wider">
                       {h}

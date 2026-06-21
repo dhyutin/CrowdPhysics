@@ -220,7 +220,7 @@ export default function MonitorTab() {
         {/* Error */}
         {error && (
           <div className="card border border-crimson/30 px-4 py-3 animate-fade-in"
-            style={{ background: "rgba(220,38,38,0.05)" }}>
+            style={{ background: "rgba(248,81,73,0.05)" }}>
             <p className="font-mono text-[10px] text-crimson uppercase tracking-wider mb-1">Error</p>
             <p className="font-mono text-xs text-crimson/80">{error}</p>
           </div>
