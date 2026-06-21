@@ -32,6 +32,11 @@ from pydantic import BaseModel
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# Initialize Arize tracing BEFORE importing claude_interpreter (which builds the
+# Anthropic client). Auto-instruments every Claude call.
+from instrumentation import setup_tracing
+setup_tracing()
+
 from flow_extractor import extract_farneback_flow, flow_to_features, render_pressure_field
 from world_model import CrowdWorldModel
 from dyna_trainer import DynaTrainer

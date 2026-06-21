@@ -2,6 +2,8 @@ fastapi
 uvicorn[standard]
 python-multipart
 anthropic
+arize-otel
+openinference-instrumentation-anthropic
 torch
 torchvision
 opencv-python-headless

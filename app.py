@@ -16,6 +16,10 @@ import json
 import os
 from pathlib import Path
 
+# Initialize Arize tracing before claude_interpreter builds the Anthropic client.
+from instrumentation import setup_tracing
+setup_tracing()
+
 from flow_extractor import (
     extract_flow,
     extract_farneback_flow,

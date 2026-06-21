@@ -31,13 +31,17 @@ def get_device():
 
 DEVICE = get_device()
 
-# Scale hyperparams to available hardware
+# Scale epochs/batch to available hardware.
+# NOTE: HIDDEN_DIM/N_LAYERS are pinned to the CrowdWorldModel defaults (256/2)
+# because backend/main.py and app.py load checkpoints with those defaults — a
+# larger architecture here would save a state_dict that fails to load there.
+HIDDEN_DIM, N_LAYERS = 256, 2
 if DEVICE.type == "cuda":
-    EPOCHS, SEQ_LEN, BATCH_SIZE, HIDDEN_DIM, N_LAYERS = 500, 50, 8, 512, 3
+    EPOCHS, SEQ_LEN, BATCH_SIZE = 500, 50, 8
 elif DEVICE.type == "mps":
-    EPOCHS, SEQ_LEN, BATCH_SIZE, HIDDEN_DIM, N_LAYERS = 300, 50, 4, 512, 3
+    EPOCHS, SEQ_LEN, BATCH_SIZE = 300, 50, 4
 else:
-    EPOCHS, SEQ_LEN, BATCH_SIZE, HIDDEN_DIM, N_LAYERS = 80,  30, 1, 256, 2
+    EPOCHS, SEQ_LEN, BATCH_SIZE = 80,  30, 1
 
 print(f"[train] Hyperparams: epochs={EPOCHS}, seq_len={SEQ_LEN}, "
       f"batch={BATCH_SIZE}, hidden={HIDDEN_DIM}, layers={N_LAYERS}")
