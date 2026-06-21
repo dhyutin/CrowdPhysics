@@ -193,9 +193,13 @@ if __name__ == "__main__":
     print("="*50)
     try:
         from dyna_trainer import DynaTrainer
-        rl_log = MetricsLogger("rl_policy", config={"episodes": 300})
+        rl_episodes = int(os.environ.get("RL_EPISODES", "8000"))
+        rl_steps = int(os.environ.get("RL_STEPS_PER_EPISODE", "10"))
+        rl_log = MetricsLogger("rl_policy", config={
+            "episodes": rl_episodes, "steps_per_episode": rl_steps})
         trainer = DynaTrainer(model)
-        trainer.run_dyna_training(n_episodes=300, logger=rl_log)
+        trainer.run_dyna_training(n_episodes=rl_episodes,
+                                  steps_per_episode=rl_steps, logger=rl_log)
         torch.save(trainer.q_net.state_dict(), "models/rl_policy.pt")
         rl_log.close(plot_keys=["avg_reward_50", "reward", "loss", "epsilon"])
         print("✓ RL policy saved: models/rl_policy.pt")
