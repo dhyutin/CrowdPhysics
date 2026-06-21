@@ -20,9 +20,9 @@ const MODES: Record<Mode, { label: string; tagline: string; desc: string; icon: 
     ),
   },
   plan: {
-    label: "Plan",
-    tagline: "Design a space before the crowd",
-    desc: "Upload a photo of a location. Agents reconstruct it, simulate the crowd, and design how to arrange people, flow and staff for your event — safely.",
+    label: "Simulate",
+    tagline: "Build the crowd in 3D before the event",
+    desc: "Upload a photo or video of a location. Agents rebuild it as a navigable 3D venue, fill it with a simulated crowd, race layout scenarios, and design the safest plan for your event.",
     icon: (
       <svg viewBox="0 0 24 24" className="w-7 h-7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <path d="M9 3v18m6-18v18M3 9h18M3 15h18" />

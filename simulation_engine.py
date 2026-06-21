@@ -191,6 +191,78 @@ class CrowdSimulator:
 
         return snapshots
 
+    def run_steps_record(self, n_steps: int = 80,
+                         crowd_density: float = 0.6,
+                         stride: int = 2) -> Dict:
+        """
+        Run the simulation and record a downsampled timeline of the velocity
+        and pressure fields, suitable for driving an agent-based 3D render in
+        the browser. Mutates state exactly like run_steps(), so afterwards the
+        simulator holds the steady-state field (use it for danger zones etc.).
+
+        Returns a JSON-safe dict:
+            {
+              "grid":     int,                 # square grid resolution
+              "frames":   int,                 # number of recorded frames
+              "vx":       [[[float]]],         # frames x grid x grid
+              "vy":       [[[float]]],         # frames x grid x grid
+              "pressure": [[[float]]],         # frames x grid x grid
+              "walls":    [[int]],             # grid x grid (1 = blocked)
+              "p_max":    float                # peak pressure across timeline
+            }
+        """
+        vx_frames: List = []
+        vy_frames: List = []
+        p_frames:  List = []
+        p_max = 1e-6
+
+        for step in range(n_steps):
+            # ── Inject crowd at entries ────────────────────────────────────
+            for sy, sx in self.sources:
+                if not self.walls[sy, sx]:
+                    self.pressure[sy, sx] += crowd_density * 0.25
+
+            # ── Diffusion ──────────────────────────────────────────────────
+            p = self.pressure
+            neighbors_sum = (
+                np.roll(p, 1, axis=0) + np.roll(p, -1, axis=0) +
+                np.roll(p, 1, axis=1) + np.roll(p, -1, axis=1)
+            )
+            diffusion = 0.18 * (neighbors_sum / 4.0 - p)
+            new_pressure = p + diffusion
+            new_pressure[self.walls] = 0.0
+
+            # ── Drain at exits ─────────────────────────────────────────────
+            for sy, sx in self.sinks:
+                if 0 <= sy < self.grid and 0 <= sx < self.grid:
+                    new_pressure[sy, sx] *= 0.35
+
+            # ── Velocity from pressure gradient ────────────────────────────
+            self.velocity_y[1:-1, :] = (
+                new_pressure[:-2, :] - new_pressure[2:, :]) * 0.3
+            self.velocity_x[:, 1:-1] = (
+                new_pressure[:, :-2] - new_pressure[:, 2:]) * 0.3
+            self.velocity_x[self.walls] = 0.0
+            self.velocity_y[self.walls] = 0.0
+
+            self.pressure = new_pressure.clip(0, 12)
+
+            if step % stride == 0:
+                vx_frames.append(np.round(self.velocity_x, 3).tolist())
+                vy_frames.append(np.round(self.velocity_y, 3).tolist())
+                p_frames.append(np.round(self.pressure, 3).tolist())
+                p_max = max(p_max, float(self.pressure.max()))
+
+        return {
+            "grid":     self.grid,
+            "frames":   len(p_frames),
+            "vx":       vx_frames,
+            "vy":       vy_frames,
+            "pressure": p_frames,
+            "walls":    self.walls.astype(int).tolist(),
+            "p_max":    round(p_max, 3),
+        }
+
     # ── ANALYSIS ──────────────────────────────────────────────────────────────
 
     def get_danger_zones(self,

@@ -310,6 +310,63 @@ Be specific and directive."""
     return resp.content[0].text
 
 
+# ─── ROLE 6b: CONCISE EVENT PLAN POINTS ──────────────────────────────────────
+
+def event_plan_points(layout, sim_results, intake, best_scenario):
+    """
+    Distil the planning decision into 4-6 crisp, prioritized, spatial bullets
+    tailored to the specific event. Returns a list[str].
+
+    Args:
+        layout:        chosen scenario layout dict
+        sim_results:   dict (peak_pressure, n_danger_zones, safe_capacity, ...)
+        intake:        dict of event-intake answers (purpose, people, duration,
+                       seating, ingress, notes)
+        best_scenario: dict {name, description} of the winning layout
+
+    Returns:
+        list[str] — concise recommendation bullets.
+    """
+    import re
+
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=400,
+        system=(
+            "You are a crowd-safety planning agent. Reply with ONLY a JSON "
+            "array of 4-6 short, imperative recommendation strings. Each must "
+            "be concrete, spatial and <= 16 words. No prose, no keys, JSON "
+            "array of strings only."
+        ),
+        messages=[{
+            "role": "user",
+            "content": f"""EVENT INTAKE:
+{json.dumps(intake, indent=2)}
+
+WINNING LAYOUT: {best_scenario.get('name')} — {best_scenario.get('description')}
+
+VENUE ELEMENTS (normalized 0-1, top-left origin):
+{json.dumps(layout.get('elements', []), indent=2)}
+
+CROWD SIMULATION RESULTS:
+{json.dumps(sim_results, indent=2)}
+
+Give 4-6 prioritized, concrete actions to plan and run this crowd safely.
+Reference entries/exits/stage/danger zones spatially. JSON array of strings only."""
+        }]
+    )
+    txt = resp.content[0].text.strip()
+    m = re.search(r"\[.*\]", txt, re.S)
+    if m:
+        try:
+            arr = json.loads(m.group(0))
+            return [str(x).strip() for x in arr if str(x).strip()]
+        except Exception:
+            pass
+    # Fallback: split lines if the model didn't return clean JSON.
+    return [ln.strip("-•* \t") for ln in txt.splitlines() if ln.strip()][:6]
+
+
 # ─── ROLE 5: VISION — VENUE LAYOUT FROM PHOTO ────────────────────────────────
 
 def extract_venue_layout(image_b64, media_type="image/jpeg", capacity_hint=None):

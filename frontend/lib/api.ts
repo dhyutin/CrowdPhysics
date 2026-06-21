@@ -77,6 +77,7 @@ export interface LiveTick {
   trend?: Trend;
   hotspot?: Hotspot;
   frame_b64?: string;
+  field_b64?: string;
   // calibrating
   venue?: string;
   fps?: number;
@@ -220,6 +221,34 @@ export async function planEvent(
   return res.json();
 }
 
+export interface EventIntake {
+  purpose: string;
+  nPeople: number;
+  density: number;
+  durationMin: number;
+  seating: string;
+  ingress: string;
+  notes: string;
+}
+
+export async function plan3d(
+  file: File,
+  intake: EventIntake
+): Promise<Plan3DResult> {
+  const form = new FormData();
+  form.append("image", file);
+  form.append("purpose", intake.purpose);
+  form.append("n_people", String(intake.nPeople));
+  form.append("density", String(intake.density));
+  form.append("duration_min", String(intake.durationMin));
+  form.append("seating", intake.seating);
+  form.append("ingress", intake.ingress);
+  form.append("notes", intake.notes);
+  const res = await fetch(`${BASE}/api/plan3d`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function runDiscover(): Promise<DiscoverResult> {
   const res = await fetch(`${BASE}/api/discover`);
   if (!res.ok) throw new Error(await res.text());
@@ -354,6 +383,52 @@ export interface SimulateResult {
 export interface PlanResult extends SimulateResult {
   plan: string;
   purpose: string;
+  agent_trace: AgentTraceStep[];
+}
+
+// ── 3D Plan / Simulate ───────────────────────────────────────────────────────
+
+// Downsampled crowd field timeline used to advect agents in three.js.
+// vx/vy/pressure are [frame][gridY][gridX]; walls is [gridY][gridX] (1 = blocked).
+export interface FieldTimeline {
+  grid: number;
+  frames: number;
+  vx: number[][][];
+  vy: number[][][];
+  pressure: number[][][];
+  walls: number[][];
+  p_max: number;
+}
+
+export interface ScenarioMetrics {
+  peak_pressure: number;
+  n_danger_zones: number;
+  safe_capacity: number;
+  crush_prob: number;
+  n_exits: number;
+}
+
+export interface Scenario {
+  id: string;
+  name: string;
+  description: string;
+  layout: VenueLayout;
+  metrics: ScenarioMetrics;
+  danger_zones: DangerZone[];
+  field: FieldTimeline;
+  rank: number;
+  is_best: boolean;
+}
+
+export interface Plan3DResult {
+  layout: VenueLayout;
+  n_people: number;
+  purpose: string;
+  scenarios: Scenario[];
+  best_scenario_id: string;
+  plan_points: string[];
+  plan: string;
+  safety_report: string;
   agent_trace: AgentTraceStep[];
 }
 

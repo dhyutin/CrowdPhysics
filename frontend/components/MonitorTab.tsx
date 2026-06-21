@@ -13,10 +13,12 @@ import {
   type Hotspot,
   type CaptureSource,
   type LiveTick,
+  type AgentTraceStep,
 } from "@/lib/api";
 import AgentTrace from "@/components/AgentTrace";
 import ForecastPanel from "@/components/ForecastPanel";
 import TrendPanel from "@/components/TrendPanel";
+import FilmPlayer, { type FilmFrame } from "@/components/FilmPlayer";
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
   SAFE:        { badge: "badge-safe",    dot: "dot-live",    label: "Safe" },
@@ -150,6 +152,7 @@ export default function MonitorTab() {
   const [liveTrend, setLiveTrend]   = useState<Trend | null>(null);
   const [liveHotspot, setLiveHotspot] = useState<Hotspot | null>(null);
   const [liveFrame, setLiveFrame]   = useState<string | null>(null);
+  const [film, setFilm]             = useState<FilmFrame[]>([]);
   const [liveStatus, setLiveStatus] = useState("CALIBRATING");
   const [liveNow, setLiveNow]       = useState(0);
   const [liveScore, setLiveScore]   = useState(0);
@@ -193,6 +196,7 @@ export default function MonitorTab() {
     setLiveTrend(null);
     setLiveHotspot(null);
     setLiveFrame(null);
+    setFilm([]);
     setPreviewErr(null);
     setPreviewLoading(true);
     try {
@@ -249,6 +253,7 @@ export default function MonitorTab() {
       setLiveTrend(null);
       setLiveHotspot(null);
       setLiveFrame(null);
+      setFilm([]);
     }
     setLiveStatus("CALIBRATING");
     setLiveNow(0);
@@ -278,6 +283,8 @@ export default function MonitorTab() {
           // rolling forecast/trend/marker from the prior pass until refreshed.
           setLiveTicks([]);
           setResult(null);
+          // Start a fresh synchronized film for this pass.
+          setFilm([]);
           break;
         case "tick": {
           const pt: TimelinePoint = {
@@ -297,6 +304,21 @@ export default function MonitorTab() {
           if (ev.trend) setLiveTrend(ev.trend);
           if (ev.hotspot) setLiveHotspot(ev.hotspot);
           if (ev.frame_b64) setLiveFrame(ev.frame_b64);
+          // Pair the real frame with its pressure field for slow sync replay.
+          if (ev.frame_b64 && ev.field_b64) {
+            const ff: FilmFrame = {
+              t: pt.time,
+              status: pt.status,
+              score: pt.score,
+              frame: ev.frame_b64,
+              field: ev.field_b64,
+              hotspot: ev.hotspot ?? null,
+            };
+            setFilm((prev) => {
+              const next = [...prev, ff];
+              return next.length > 300 ? next.slice(next.length - 300) : next;
+            });
+          }
           break;
         }
         case "done":
@@ -361,6 +383,59 @@ export default function MonitorTab() {
     const rank = { DANGER: 3, WARNING: 2, SAFE: 1, CALIBRATING: 0 };
     return (rank[p.status as keyof typeof rank] ?? 0) > (rank[worst as keyof typeof rank] ?? 0) ? p.status : worst;
   }, "SAFE") ?? "SAFE";
+
+  // A live agent trace so the pipeline is visible WHILE streaming (not only
+  // after a pass finishes). Falls back to the final trace once `result` lands.
+  const liveTrace = useMemo<AgentTraceStep[]>(() => {
+    if (!streaming && !monitoring) return [];
+    const danger = liveStatus === "DANGER";
+    const warn = liveStatus === "WARNING";
+    const steps: AgentTraceStep[] = [
+      {
+        agent: "Calibration Agent", icon: "calibrate",
+        action: liveStatus === "CALIBRATING"
+          ? "Establishing calm baseline…" : "Calm baseline locked",
+        detail: `${liveTicks.length} frames processed`, status: "ok",
+      },
+      {
+        agent: "World Model", icon: "brain",
+        action: "Encoding crowd state → 64-dim latent",
+        detail: `LSTM roll-forward · surprise ${liveScore.toFixed(2)}σ`,
+        status: "ok",
+      },
+      {
+        agent: "Anomaly Detector", icon: "pulse",
+        action: danger ? "Crush pattern forming"
+          : warn ? "Elevated crowd pressure" : "Flow within normal bounds",
+        detail: `status ${liveStatus} · ${liveScore.toFixed(2)}σ`,
+        status: danger ? "danger" : "ok",
+      },
+    ];
+    if (liveForecast?.points?.length) {
+      steps.push({
+        agent: "Forecast Agent", icon: "forecast",
+        action: `Imagined next ${liveForecast.horizon_s ?? ""}s`,
+        detail: `peak risk ${Math.round(liveForecast.projected_risk ?? 0)}%`,
+        status: liveForecast.projected_status === "DANGER" ? "danger" : "ok",
+      });
+    }
+    if (liveTrend?.points?.length) {
+      const sl = liveTrend.slope_per_min ?? 0;
+      steps.push({
+        agent: "Trend Projection", icon: "eye",
+        action: "Minutes-ahead risk outlook",
+        detail: `${sl > 0 ? "+" : ""}${sl}%/min trend`,
+        status: liveTrend.projected_status === "DANGER" ? "danger" : "ok",
+      });
+    }
+    steps.push({
+      agent: "Claude", icon: "claude",
+      action: "Operator briefing on completion",
+      detail: "Sonnet 4.6", status: "ok",
+    });
+    return steps;
+  }, [streaming, monitoring, liveStatus, liveScore, liveTicks.length,
+      liveForecast, liveTrend]);
 
   return (
     <div className="flex h-full gap-0 min-h-0">
@@ -628,9 +703,72 @@ export default function MonitorTab() {
               />
             )}
 
-            {/* Flow-statistics field (animated) */}
-            <div className="card relative min-h-72 flex-1 flex items-center justify-center">
-              {result?.flow_gif_b64 || result?.peak_frame_b64 ? (
+            {/* Synchronized replay — real frames ↔ pressure field, slow + scrubbable */}
+            {film.length > 0 && <FilmPlayer film={film} live={streaming} />}
+
+            {/* Flow-statistics field (animated) — fallback when no film yet */}
+            {film.length === 0 && (
+            <div className="card relative min-h-72 flex-1 flex items-center justify-center overflow-hidden">
+              {(streaming || (monitoring && !result)) && liveFrame ? (
+                /* The actual analyzed frame with the danger marker drawn on the
+                   SAME pixels the hotspot came from → guaranteed alignment. */
+                <div className="relative inline-block animate-fade-in">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/jpeg;base64,${liveFrame}`}
+                    alt="Analyzed live frame"
+                    className="block max-h-[440px] max-w-full w-auto rounded"
+                  />
+
+                  {liveHotspot &&
+                    (liveStatus === "DANGER" || liveStatus === "WARNING") && (() => {
+                    const danger = liveStatus === "DANGER";
+                    const ring = danger ? "#F85149" : "#D29922";
+                    const op = 0.5 + 0.45 * Math.min(1, liveHotspot.intensity);
+                    return (
+                      <div
+                        className="pointer-events-none absolute z-10 transition-all duration-700 ease-out"
+                        style={{
+                          left: `${liveHotspot.x * 100}%`,
+                          top: `${liveHotspot.y * 100}%`,
+                          width: `${Math.round(liveHotspot.r * 100)}%`,
+                          transform: "translate(-50%, -50%)",
+                          opacity: op,
+                        }}
+                      >
+                        <div
+                          className={`aspect-square rounded-full ${danger ? "animate-pulse" : ""}`}
+                          style={{
+                            border: `2px solid ${ring}`,
+                            boxShadow: `0 0 22px ${ring}, inset 0 0 28px ${danger ? "rgba(248,81,73,0.4)" : "rgba(210,153,34,0.28)"}`,
+                            background: `radial-gradient(circle, ${danger ? "rgba(248,81,73,0.22)" : "rgba(210,153,34,0.16)"} 0%, transparent 70%)`,
+                          }}
+                        />
+                        <div
+                          className="absolute top-1/2 left-1/2 w-1.5 h-1.5 rounded-full -translate-x-1/2 -translate-y-1/2"
+                          style={{ background: ring }}
+                        />
+                        <div className="absolute left-1/2 -translate-x-1/2 -top-6 whitespace-nowrap">
+                          <div className={danger ? "badge-danger" : "badge-warning"}>
+                            <span className={danger ? "dot-danger" : "dot-warning"} />
+                            {danger ? "DANGER" : "RISK"} · {liveScore.toFixed(1)}σ
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="absolute top-2 left-2">
+                    <div className={STATUS_META[liveStatus]?.badge ?? "badge-neutral"}>
+                      <span className={STATUS_META[liveStatus]?.dot} />
+                      {STATUS_META[liveStatus]?.label ?? "Live"}
+                    </div>
+                  </div>
+                  <div className="absolute bottom-2 right-2 font-mono text-[9px] text-text3 bg-void/70 px-2 py-1 rounded flex items-center gap-1.5">
+                    <span className="dot-live" /> Analyzed frame · region marked
+                  </div>
+                </div>
+              ) : result?.flow_gif_b64 || result?.peak_frame_b64 ? (
                 <>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
@@ -687,6 +825,7 @@ export default function MonitorTab() {
                 </div>
               )}
             </div>
+            )}
 
             {/* Summary bar */}
             {result && (
@@ -721,10 +860,18 @@ export default function MonitorTab() {
               return pts && pts.length ? <Timeline points={pts} /> : null;
             })()}
 
-            {/* Agent trace */}
-            {result?.agent_trace && result.agent_trace.length > 0 && (
-              <AgentTrace steps={result.agent_trace} title="Agent Trace" />
-            )}
+            {/* Agent trace — live while streaming, final once result lands */}
+            {(() => {
+              const finalTrace = result?.agent_trace ?? [];
+              const trace = finalTrace.length > 0 ? finalTrace : liveTrace;
+              return trace.length > 0 ? (
+                <AgentTrace
+                  steps={trace}
+                  title="Agent Trace"
+                  live={finalTrace.length === 0 && (streaming || monitoring)}
+                />
+              ) : null;
+            })()}
 
             {/* Claude */}
             <div className="card flex flex-col">

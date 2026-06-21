@@ -91,6 +91,7 @@ from claude_interpreter import (
     generate_safety_report,
     extract_venue_layout,
     plan_event_layout,
+    event_plan_points,
 )
 from simulation_engine import VenueConfig, VenueElement, CrowdSimulator
 
@@ -662,9 +663,11 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
             }
             timeline.append(point)
 
+            # Pressure field for THIS frame — paired with the real frame so the
+            # UI can replay both in sync.
+            f_img, _ = render_pressure_field(flow, physics, frame_shape=(240, 320))
+            field_b64 = _frame_to_jpeg_b64(f_img, width=360, quality=55)
             if step % GIF_STRIDE == 0 and len(field_frames) < GIF_MAX_FRAMES:
-                f_img, _ = render_pressure_field(
-                    flow, physics, frame_shape=(240, 320))
                 field_frames.append(cv2.cvtColor(f_img, cv2.COLOR_BGR2RGB))
 
             if physics["score"] > peak_score:
@@ -676,10 +679,13 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
             tick = {"type": "tick", "step": step, **point}
 
             # The exact analyzed frame (so the UI overlays the marker on the
-            # same pixels the hotspot was computed from → perfect alignment).
+            # same pixels the hotspot was computed from → perfect alignment),
+            # paired with this frame's pressure field for synchronized replay.
             fb = _frame_to_jpeg_b64(curr)
             if fb:
                 tick["frame_b64"] = fb
+            if field_b64:
+                tick["field_b64"] = field_b64
 
             # Region of danger — recomputed and smoothed every frame so the
             # live marker tracks the building pressure continuously.
@@ -1324,6 +1330,284 @@ async def plan(
          "status": "ok"},
     ]
     return JSONResponse(_numpy_clean(result))
+
+
+# ── POST /api/plan3d ──────────────────────────────────────────────────────────
+#
+# Agentic 3D crowd simulation: photo -> reconstructed venue -> several layout
+# scenarios simulated as a crowd fluid field -> ranked -> Claude tailors a plan.
+# Returns per-scenario velocity/pressure field timelines so the browser can
+# advect N agents through them in three.js.
+
+# Canonical extra elements used to synthesise alternative scenarios. Placed one
+# cell inside the perimeter walls so they act as real drains (not blocked).
+_PERIMETER_EXITS = [
+    VenueElement("gate", 0.05, 0.43, 0.05, 0.16, label="EXIT L"),
+    VenueElement("gate", 0.90, 0.43, 0.05, 0.16, label="EXIT R"),
+    VenueElement("gate", 0.42, 0.90, 0.16, 0.05, label="EXIT S"),
+    VenueElement("gate", 0.42, 0.07, 0.16, 0.05, label="EXIT N"),
+]
+_LANE_BARRIERS = [
+    VenueElement("barrier", 0.34, 0.42, 0.02, 0.26, label="LANE A"),
+    VenueElement("barrier", 0.64, 0.42, 0.02, 0.26, label="LANE B"),
+]
+
+
+def _clone_elements(elements: list[VenueElement]) -> list[VenueElement]:
+    return [VenueElement(e.type, e.x, e.y, e.w, e.h, e.capacity, e.label)
+            for e in elements]
+
+
+def _venue_to_layout_dict(config: VenueConfig, base_layout: dict | None) -> dict:
+    """Build a frontend VenueLayout dict from a VenueConfig."""
+    base = base_layout or {}
+    return {
+        "name":       config.name,
+        "capacity":   config.total_capacity,
+        "view":       base.get("view", "reconstructed"),
+        "confidence": base.get("confidence", 0.0),
+        "notes":      base.get("notes", ""),
+        "elements": [
+            {"type": e.type, "x": e.x, "y": e.y, "w": e.w, "h": e.h,
+             "label": e.label}
+            for e in config.elements
+        ],
+    }
+
+
+def _generate_scenarios(base_layout: dict, capacity: int) -> list[dict]:
+    """
+    Produce candidate venue configurations from the detected layout. Each keeps
+    the detected structure and varies egress / flow so outcomes can be compared.
+    Returns list of {id, name, description, config}.
+    """
+    base_elements = [
+        VenueElement(e["type"], e["x"], e["y"], e["w"], e["h"],
+                     label=e.get("label", ""))
+        for e in base_layout.get("elements", [])
+    ]
+    name = base_layout.get("name", "Venue")
+
+    def cfg(elements):
+        return VenueConfig(name=name, total_capacity=capacity, elements=elements)
+
+    return [
+        {"id": "baseline", "name": "As-is",
+         "description": "The venue exactly as detected, with no changes.",
+         "config": cfg(_clone_elements(base_elements))},
+        {"id": "more_egress", "name": "More egress",
+         "description": "Add perimeter exits on every free wall to drain pressure faster.",
+         "config": cfg(_clone_elements(base_elements) + _clone_elements(_PERIMETER_EXITS))},
+        {"id": "split_flow", "name": "Split flow",
+         "description": "Add lane barriers in front of the stage to break the frontal crush.",
+         "config": cfg(_clone_elements(base_elements) + _clone_elements(_LANE_BARRIERS))},
+        {"id": "optimized", "name": "Optimized",
+         "description": "Perimeter exits plus lane barriers — the best of both.",
+         "config": cfg(_clone_elements(base_elements)
+                       + _clone_elements(_PERIMETER_EXITS)
+                       + _clone_elements(_LANE_BARRIERS))},
+    ]
+
+
+def _scenario_crush_prob(sim: CrowdSimulator) -> float:
+    """
+    Estimate a crush probability for a settled simulation by running its
+    256-dim feature signature through the trained world model / anomaly
+    detector. Uses a private detector so the live monitor's state is untouched.
+    """
+    try:
+        feats = sim.to_features()
+        det = CrowdPhysicsDetector(_wm, _trainer, window_size=8,
+                                   alert_threshold=2.5)
+        calm = np.full((40, feats.shape[0]), 1e-3, dtype=np.float32)
+        det.calibrate([calm])
+        seq = np.tile(feats, (12, 1)).astype(np.float32)
+        states = det.analyze_sequence(seq, auto_calibrate=False)
+        return float(states[-1]["probability"])
+    except Exception:
+        return 0.0
+
+
+def _n_exits(config: VenueConfig) -> int:
+    return max(1, len({(round(e.x, 3), round(e.y, 3))
+                       for e in config.elements if e.type == "gate"}))
+
+
+def _fallback_points(best: dict) -> list[str]:
+    m = best["metrics"]
+    pts = []
+    if m["n_danger_zones"]:
+        pts.append(f"Resolve {m['n_danger_zones']} danger zones before doors open.")
+    pts.append(f"Cap attendance at about {m['safe_capacity']:,} for this layout.")
+    pts.append(f"Adopt the '{best['name']}' layout: {best['description']}")
+    pts.append("Separate ingress and egress routes to avoid counter-flow.")
+    pts.append("Station stewards at the highest-pressure zones near the stage.")
+    pts.append("Keep all marked exits unlocked and unobstructed throughout.")
+    return pts[:6]
+
+
+@app.post("/api/plan3d")
+async def plan3d(
+    image:        UploadFile = File(...),
+    purpose:      str   = Form(default="general gathering"),
+    n_people:     int   = Form(default=0),
+    density:      float = Form(default=0.65),
+    duration_min: int   = Form(default=0),
+    seating:      str   = Form(default="standing"),
+    ingress:      str   = Form(default="gradual"),
+    notes:        str   = Form(default=""),
+):
+    """
+    Plan-in-3D: photo -> Claude vision reconstruction -> multi-scenario crowd
+    fluid simulation (with world-model crush scoring) -> ranked layouts +
+    field timelines + Claude event-tailored plan.
+
+    Returns:
+      layout            detected VenueLayout (echoed for the 3D reconstruction)
+      n_people          attendance used
+      purpose           event purpose
+      scenarios[]       {id,name,description,layout,metrics,danger_zones,field,
+                         rank,is_best}
+      best_scenario_id  id of the winning scenario
+      plan_points[]     concise recommendation bullets
+      plan              full arrangement plan text
+      safety_report     pre-event safety brief
+      agent_trace       UI agent steps
+    """
+    suffix = Path(image.filename or "").suffix.lower()
+    media_type = _VISION_MEDIA.get(suffix, "image/jpeg")
+
+    raw = await image.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    image_b64 = base64.b64encode(raw).decode()
+
+    cap_hint = n_people if n_people and n_people > 0 else None
+    try:
+        layout = extract_venue_layout(image_b64, media_type, capacity_hint=cap_hint)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Vision layout extraction failed: {exc}")
+
+    final_capacity = cap_hint or layout.get("capacity", 5000)
+
+    # ── Simulate every scenario ───────────────────────────────────────────
+    variants = _generate_scenarios(layout, final_capacity)
+    scenarios: list[dict] = []
+    for v in variants:
+        config = v["config"]
+        sim = CrowdSimulator(grid_size=20)
+        sim.configure_from_venue(config)
+        # run_steps_record settles to steady state AND captures the timeline
+        field = sim.run_steps_record(n_steps=80, crowd_density=density, stride=2)
+
+        danger   = sim.get_danger_zones(threshold=3.0)
+        safe_cap = sim.estimate_safe_capacity(final_capacity)
+        peak_p   = float(sim.pressure.max())
+        crush    = _scenario_crush_prob(sim)
+
+        metrics = {
+            "peak_pressure":  round(peak_p, 2),
+            "n_danger_zones": len(danger),
+            "safe_capacity":  safe_cap,
+            "crush_prob":     round(crush, 3),
+            "n_exits":        _n_exits(config),
+        }
+        # Lower is safer.
+        score = (min(peak_p, 12.0) / 12.0 * 0.40
+                 + min(len(danger), 10) / 10.0 * 0.30
+                 + crush * 0.30)
+        scenarios.append({
+            "id":           v["id"],
+            "name":         v["name"],
+            "description":  v["description"],
+            "layout":       _venue_to_layout_dict(config, layout),
+            "metrics":      metrics,
+            "danger_zones": danger[:10],
+            "field":        field,
+            "_score":       score,
+        })
+
+    order = sorted(range(len(scenarios)), key=lambda i: scenarios[i]["_score"])
+    for rank, idx in enumerate(order):
+        scenarios[idx]["rank"]    = rank + 1
+        scenarios[idx]["is_best"] = (rank == 0)
+        scenarios[idx].pop("_score", None)
+    best    = scenarios[order[0]]
+    best_id = best["id"]
+
+    # ── Claude: plan + report + concise points on the winning scenario ─────
+    sim_results = {
+        "n_danger_zones": best["metrics"]["n_danger_zones"],
+        "peak_pressure":  best["metrics"]["peak_pressure"],
+        "safe_capacity":  best["metrics"]["safe_capacity"],
+        "n_exits":        best["metrics"]["n_exits"],
+        "danger_zones":   best["danger_zones"][:5],
+    }
+    intake = {
+        "purpose":         purpose,
+        "expected_people": final_capacity,
+        "duration_min":    duration_min,
+        "seating":         seating,
+        "ingress":         ingress,
+        "notes":           notes,
+    }
+
+    try:
+        plan_text = plan_event_layout(best["layout"], sim_results, purpose, final_capacity)
+    except Exception as exc:
+        plan_text = f"(Planning agent unavailable: {exc})"
+
+    try:
+        report = generate_safety_report(
+            {"name": layout.get("name", "Venue"), "capacity": final_capacity,
+             "exits": best["metrics"]["n_exits"], **intake}, sim_results)
+    except Exception as exc:
+        report = f"(Claude unavailable: {exc})"
+
+    try:
+        points = event_plan_points(
+            best["layout"], sim_results, intake,
+            {"name": best["name"], "description": best["description"]})
+    except Exception:
+        points = []
+    if not points:
+        points = _fallback_points(best)
+
+    n_danger = best["metrics"]["n_danger_zones"]
+    agent_trace = [
+        {"agent": "Vision Surveyor", "icon": "eye",
+         "action": "Reconstructed venue from photo",
+         "detail": (f"{len(layout.get('elements', []))} elements · "
+                    f"{int(round(layout.get('confidence', 0) * 100))}% confidence"),
+         "status": "ok"},
+        {"agent": "Scenario Architect", "icon": "plan",
+         "action": "Generated layout scenarios",
+         "detail": f"{len(scenarios)} arrangements simulated & ranked",
+         "status": "ok"},
+        {"agent": "Crowd Simulator", "icon": "pulse",
+         "action": "Ran crowd fluid dynamics + world model",
+         "detail": (f"best peak pressure {best['metrics']['peak_pressure']:.1f} · "
+                    f"{n_danger} danger zones"),
+         "status": "danger" if n_danger else "ok"},
+        {"agent": "Event Planner · Claude", "icon": "claude",
+         "action": "Tailored a plan to the event",
+         "detail": f"optimized for: {purpose}",
+         "status": "ok"},
+    ]
+
+    out = {
+        "layout":           layout,
+        "n_people":         final_capacity,
+        "purpose":          purpose,
+        "scenarios":        scenarios,
+        "best_scenario_id": best_id,
+        "plan_points":      points,
+        "plan":             plan_text,
+        "safety_report":    report,
+        "agent_trace":      agent_trace,
+    }
+    return JSONResponse(_numpy_clean(out))
 
 
 # ── GET /api/discover ─────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { AgentTraceStep } from "@/lib/api";
 
 const ICONS: Record<string, React.ReactNode> = {
@@ -54,18 +55,42 @@ function StepIcon({ icon, danger }: { icon: string; danger: boolean }) {
 export default function AgentTrace({
   steps,
   title = "Agent Trace",
+  defaultOpen = true,
+  live = false,
 }: {
   steps: AgentTraceStep[];
   title?: string;
+  defaultOpen?: boolean;
+  live?: boolean;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
   if (!steps?.length) return null;
   return (
     <div className="card flex flex-col animate-fade-in">
-      <div className="panel-header">
-        <p className="panel-label">{title}</p>
-        <span className="badge-teal text-[9px] px-1.5 py-0.5">{steps.length} agents</span>
-      </div>
-      <div className="p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="panel-header w-full text-left hover:bg-raised/40 transition-colors cursor-pointer"
+      >
+        <p className="panel-label flex items-center gap-1.5">
+          {live && <span className="dot-live" />}
+          {title}
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="badge-teal text-[9px] px-1.5 py-0.5">{steps.length} agents</span>
+          <svg
+            className={`w-3.5 h-3.5 text-text3 transition-transform ${open ? "rotate-180" : ""}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            strokeWidth="2"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </button>
+      {open && (
+      <div className="p-4 max-h-72 overflow-y-auto">
         <div className="relative flex flex-col gap-3">
           {/* connecting spine */}
           <div className="absolute left-[13px] top-3 bottom-3 w-px bg-border" />
@@ -97,6 +122,7 @@ export default function AgentTrace({
           })}
         </div>
       </div>
+      )}
     </div>
   );
 }
