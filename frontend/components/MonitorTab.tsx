@@ -91,6 +91,7 @@ export default function MonitorTab() {
   const [liveSession, setLiveSession] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewErr, setPreviewErr]   = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
 
   // Object URL for previewing the uploaded video locally.
   const objectUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
@@ -153,6 +154,17 @@ export default function MonitorTab() {
       setLoad(false);
     }
   }
+
+  // Live auto-refresh: after a successful live capture, re-run on an interval
+  // so the flow GIF keeps updating. (Browserbase capture takes ~30-60s, so a
+  // true real-time stream isn't practical — this re-captures periodically.)
+  const handleRunRef = useRef(handleRun);
+  handleRunRef.current = handleRun;
+  useEffect(() => {
+    if (!autoRefresh || mode !== "live" || loading || !result) return;
+    const id = setTimeout(() => handleRunRef.current(), 30000);
+    return () => clearTimeout(id);
+  }, [autoRefresh, mode, loading, result]);
 
   const peakStatus = result?.timeline?.reduce((worst, p) => {
     const rank = { DANGER: 3, WARNING: 2, SAFE: 1, CALIBRATING: 0 };
@@ -242,6 +254,17 @@ export default function MonitorTab() {
                 then <span className="text-teal">Monitor Live</span> captures &amp;
                 analyzes it (~30–60s).
               </p>
+              <label className="flex items-center gap-2 cursor-pointer select-none mt-0.5">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  className="accent-teal w-3 h-3"
+                />
+                <span className="font-mono text-[10px] text-text2">
+                  Auto-refresh flow (~30s)
+                </span>
+              </label>
             </div>
           )}
 
@@ -384,14 +407,18 @@ export default function MonitorTab() {
           </div>
         ) : (
           <>
-            {/* Pressure field */}
+            {/* Flow-statistics field (animated) */}
             <div className="card relative min-h-72 flex-1 flex items-center justify-center">
-              {result?.peak_frame_b64 ? (
+              {result?.flow_gif_b64 || result?.peak_frame_b64 ? (
                 <>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={`data:image/png;base64,${result.peak_frame_b64}`}
-                    alt="Crowd pressure field"
+                    src={
+                      result.flow_gif_b64
+                        ? `data:image/gif;base64,${result.flow_gif_b64}`
+                        : `data:image/png;base64,${result.peak_frame_b64}`
+                    }
+                    alt="Crowd flow-statistics field"
                     className="w-full h-full object-contain animate-fade-in"
                   />
                   <div className="absolute top-3 left-3">
@@ -400,8 +427,12 @@ export default function MonitorTab() {
                       Peak: {STATUS_META[peakStatus]?.label}
                     </div>
                   </div>
-                  <div className="absolute bottom-3 right-3 font-mono text-[9px] text-text3 bg-void/70 px-2 py-1 rounded">
-                    CFD Pressure Field
+                  <div className="absolute bottom-3 right-3 font-mono text-[9px] text-text3 bg-void/70 px-2 py-1 rounded flex items-center gap-1.5">
+                    {result.flow_gif_b64 ? (
+                      <><span className="dot-live" /> Flow Field · animated</>
+                    ) : (
+                      <>CFD Pressure Field · peak</>
+                    )}
                   </div>
                 </>
               ) : (

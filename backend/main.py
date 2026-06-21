@@ -105,6 +105,30 @@ def _frame_to_b64(frame_bgr: np.ndarray) -> str:
     return base64.b64encode(buf).decode()
 
 
+def _frames_to_gif_b64(frames_rgb: list[np.ndarray], fps: float = 12.0) -> str | None:
+    """
+    Encode a list of RGB uint8 frames as a looping animated GIF (base64).
+
+    Used to animate the flow-statistics (pressure) field over time so the
+    Monitor UI can show the crowd physics evolving rather than a single still.
+    Best-effort: returns None on any failure so analysis never breaks.
+    """
+    if not frames_rgb:
+        return None
+    try:
+        from PIL import Image
+        imgs = [Image.fromarray(f) for f in frames_rgb]
+        buf = io.BytesIO()
+        imgs[0].save(
+            buf, format="GIF", save_all=True, append_images=imgs[1:],
+            duration=int(1000.0 / max(fps, 1.0)), loop=0, disposal=2,
+            optimize=True,
+        )
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return None
+
+
 def _numpy_clean(obj: Any) -> Any:
     """Recursively convert numpy types to Python natives for JSON."""
     if isinstance(obj, dict):
@@ -231,6 +255,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
 
     timeline: list = []
     feat_history: list = []   # decoded flow features per frame (for forecasting)
+    field_frames: list = []   # rendered flow-statistics fields (for the GIF)
     peak_flow = None          # cheapest source — render only the peak, once
     peak_score = -999.0
     peak_physics = None
@@ -238,9 +263,15 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
     last_rl = ""
     did_claude = False
 
-    # ── DETECTION PASS (no rendering) ────────────────────────────────────────
-    # Single optical flow per frame; the expensive pressure-field render is
-    # deferred to the peak frame only (was previously done every frame).
+    # Animate the flow-statistics field: render a subsampled sequence of
+    # pressure-field frames and stitch them into a looping GIF for the UI.
+    GIF_STRIDE = 2            # render every Nth frame
+    GIF_MAX_FRAMES = 80       # cap GIF length so payload/size stay reasonable
+
+    # ── DETECTION PASS ───────────────────────────────────────────────────────
+    # Single optical flow per frame. The full-detail peak render is still done
+    # once after the loop; here we also collect a subsampled, lower-res sequence
+    # of field frames to animate.
     prev_frame = frames[0]
     for step, curr in enumerate(frames[1:]):
         sm_curr = cv2.resize(curr, (320, 240))
@@ -257,6 +288,11 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
             "score":       physics["score"],
             "probability": round(physics["probability"] * 100, 1),
         })
+
+        if step % GIF_STRIDE == 0 and len(field_frames) < GIF_MAX_FRAMES:
+            f_img, _ = render_pressure_field(
+                flow, physics, frame_shape=(240, 320))
+            field_frames.append(cv2.cvtColor(f_img, cv2.COLOR_BGR2RGB))
 
         if physics["score"] > peak_score:
             peak_score = physics["score"]
@@ -276,11 +312,14 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
 
         prev_frame = curr
 
-    # ── RENDER PEAK FRAME ONLY ───────────────────────────────────────────────
+    # ── RENDER PEAK FRAME + ANIMATED FLOW FIELD ──────────────────────────────
     peak_frame = None
     if peak_flow is not None:
         peak_frame, _ = render_pressure_field(
             peak_flow, peak_physics, frame_shape=(480, 640))
+
+    # ~12 fps loop regardless of source fps so short/long clips animate nicely.
+    flow_gif_b64 = _frames_to_gif_b64(field_frames, fps=12.0)
 
     danger_n = sum(1 for p in timeline if p["status"] == "DANGER")
     total = len(timeline)
@@ -343,6 +382,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
 
     return {
         "peak_frame_b64": _frame_to_b64(peak_frame) if peak_frame is not None else None,
+        "flow_gif_b64":    flow_gif_b64,
         "summary":         summary,
         "claude_briefing": last_claude,
         "rl_explanation":  last_rl,

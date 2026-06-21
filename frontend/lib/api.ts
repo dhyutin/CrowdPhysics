@@ -149,6 +149,7 @@ export interface AgentTraceStep {
 
 export interface AnalyzeResult {
   peak_frame_b64: string | null;
+  flow_gif_b64?: string | null;
   summary: string;
   claude_briefing: string;
   rl_explanation: string;
