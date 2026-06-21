@@ -17,6 +17,9 @@ raft_log.txt
 tests/*.png
 tests/_tmp_*
 
+# Local archive of dead/old files (not tracked)
+archive/
+
 # Python
 __pycache__/
 *.pyc

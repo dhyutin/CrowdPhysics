@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useRef, useEffect, type MutableRefObject } from "react";
+import { useMemo, useRef, useEffect, useState, type MutableRefObject } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { OrbitControls, Html } from "@react-three/drei";
 import * as THREE from "three";
 import type {
   Scenario,
@@ -13,6 +13,7 @@ import type {
   VenueArchetype,
   AgentPlan,
 } from "@/lib/api";
+import { buildVenuePins } from "@/lib/venuePins";
 
 // World is a SIZE x SIZE square centered at the origin, floor on the XZ plane,
 // Y is up. Normalized layout coords (0-1, top-left origin) map onto it.
@@ -573,25 +574,56 @@ function Decor({ layout }: { layout: VenueLayout }) {
   );
 }
 
+// Numbered access-point pins (entries / exits). Each gets a floor patch, a
+// soft beam, and a floating numbered badge that maps to the legend.
 function Markers({ layout }: { layout: VenueLayout }) {
+  const pins = useMemo(() => buildVenuePins(layout), [layout]);
   return (
     <group>
-      {layout.elements.map((e, i) => {
-        if (e.type !== "entry" && e.type !== "gate") return null;
-        const color = e.type === "entry" ? "#3FB950" : "#4493F8";
-        const w = Math.max(0.3, e.w * SIZE);
-        const d = Math.max(0.3, e.h * SIZE);
+      {pins.map((pin) => {
+        const w = Math.max(0.3, pin.w * SIZE);
+        const d = Math.max(0.3, pin.h * SIZE);
+        const beam = Math.min(w, d) * 0.5;
         return (
-          <group key={`m${i}`} position={[wx(e.x + e.w / 2), 0, wz(e.y + e.h / 2)]}>
+          <group key={`m${pin.n}`} position={[wx(pin.x), 0, wz(pin.y)]}>
             <mesh position={[0, 0.04, 0]} rotation={[-Math.PI / 2, 0, 0]}>
               <planeGeometry args={[w, d]} />
-              <meshBasicMaterial color={color} transparent opacity={0.85} toneMapped={false} />
+              <meshBasicMaterial color={pin.color} transparent opacity={0.85} toneMapped={false} />
             </mesh>
             {/* soft beam so entries/exits read at a glance */}
             <mesh position={[0, 1.6, 0]}>
-              <boxGeometry args={[Math.min(w, d) * 0.5, 3.2, Math.min(w, d) * 0.5]} />
-              <meshBasicMaterial color={color} transparent opacity={0.12} toneMapped={false} />
+              <boxGeometry args={[beam, 3.2, beam]} />
+              <meshBasicMaterial color={pin.color} transparent opacity={0.12} toneMapped={false} />
             </mesh>
+            {/* numbered pin badge floating above the access point */}
+            <Html
+              position={[0, 3.9, 0]}
+              center
+              distanceFactor={20}
+              zIndexRange={[20, 0]}
+              style={{ pointerEvents: "none", userSelect: "none" }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                  background: pin.color,
+                  color: "#0D1117",
+                  fontFamily: "ui-monospace, monospace",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  border: "2px solid rgba(255,255,255,0.9)",
+                  boxShadow: "0 2px 6px rgba(0,0,0,0.5)",
+                  pointerEvents: "none",
+                }}
+              >
+                {pin.n}
+              </div>
+            </Html>
           </group>
         );
       })}
@@ -645,6 +677,7 @@ function Agents({
   count,
   frameRef,
   playingRef,
+  speedRef,
   agentPlan,
   onPhase,
 }: {
@@ -652,6 +685,7 @@ function Agents({
   count: number;
   frameRef: MutableRefObject<number>;
   playingRef: MutableRefObject<boolean>;
+  speedRef: MutableRefObject<number>;
   agentPlan?: AgentPlan | null;
   onPhase?: (phase: CrowdPhase) => void;
 }) {
@@ -690,6 +724,8 @@ function Agents({
     const home = new Float32Array(count * 2);
     const entryFrom = new Float32Array(count * 2);
     const exitTo = new Float32Array(count * 2);
+    const exitOut = new Float32Array(count * 2); // point OUTSIDE the boundary
+    const escaped = new Uint8Array(count);       // has cleared the exit gate
     const goal = new Float32Array(count * 2);
     const speed = new Float32Array(count);
     const isLLM = new Uint8Array(count);
@@ -715,10 +751,14 @@ function Agents({
       pos[i * 2] = nx;
       pos[i * 2 + 1] = ny;
 
-      // Enter from one of the entry points (round-robin + jitter).
+      // Start OUTSIDE the venue boundary at one of the entrances and stream in
+      // through it, so entries visibly connect to the environment (mirrors exit).
       const ep = ENTER[i % ENTER.length];
-      entryFrom[i * 2] = clamp01(ep[0] + jit());
-      entryFrom[i * 2 + 1] = clamp01(ep[1] + jit());
+      let ix = ep[0] - 0.5, iy = ep[1] - 0.5;
+      const inrm = Math.hypot(ix, iy) || 1e-3;
+      ix /= inrm; iy /= inrm;
+      entryFrom[i * 2] = ep[0] + ix * 0.5 + jit();
+      entryFrom[i * 2 + 1] = ep[1] + iy * 0.5 + jit();
 
       // Exit via the nearest gate to this agent's home spot.
       let best = 0, bd = Infinity;
@@ -726,8 +766,15 @@ function Agents({
         const d = (EXIT[k][0] - nx) ** 2 + (EXIT[k][1] - ny) ** 2;
         if (d < bd) { bd = d; best = k; }
       }
-      exitTo[i * 2] = clamp01(EXIT[best][0] + jit());
-      exitTo[i * 2 + 1] = clamp01(EXIT[best][1] + jit());
+      const ex = EXIT[best][0], ey = EXIT[best][1];
+      exitTo[i * 2] = clamp01(ex + jit());
+      exitTo[i * 2 + 1] = clamp01(ey + jit());
+      // Continue past the gate, straight out of the venue boundary, to vanish.
+      let ox = ex - 0.5, oy = ey - 0.5;
+      const on = Math.hypot(ox, oy) || 1e-3;
+      ox /= on; oy /= on;
+      exitOut[i * 2] = ex + ox * 0.6 + jit();
+      exitOut[i * 2 + 1] = ey + oy * 0.6 + jit();
 
       if (i < nLLM && behaviors.length) {
         isLLM[i] = 1;
@@ -745,8 +792,8 @@ function Agents({
         local[i] = wmLocal++;
       }
     }
-    return { pos, home, entryFrom, exitTo, goal, speed, isLLM, local,
-             nLLM, wmCount: count - nLLM };
+    return { pos, home, entryFrom, exitTo, exitOut, escaped, goal, speed,
+             isLLM, local, nLLM, wmCount: count - nLLM };
   }, [count, G, walls, agentPlan, scenario.layout.elements]);
 
   const dummy = useMemo(() => new THREE.Object3D(), []);
@@ -762,9 +809,13 @@ function Agents({
     const pr = scenario.field.pressure[f];
     if (!vx || !vy || !pr) return;
 
-    const { pos, home, entryFrom, exitTo, goal, speed, isLLM, local } = sim;
+    const { pos, home, entryFrom, exitTo, exitOut, escaped, goal, speed,
+            isLLM, local } = sim;
     const moving = playingRef.current;
-    const dt = Math.min(delta, 0.05);
+    // Global speed multiplier scales the whole animation clock uniformly, so
+    // the entry/stay/exit choreography stays consistent — just slower/faster.
+    const spd = Math.max(0.1, speedRef.current || 1);
+    const dt = Math.min(delta, 0.05) * spd;
 
     // Advance the phase clock and resolve the current phase.
     if (moving) phaseClock.current += dt;
@@ -778,6 +829,7 @@ function Agents({
       for (let i = 0; i < count; i++) {
         pos[i * 2] = entryFrom[i * 2];
         pos[i * 2 + 1] = entryFrom[i * 2 + 1];
+        escaped[i] = 0;
       }
     }
     if (phase !== reportedPhase.current) {
@@ -788,7 +840,7 @@ function Agents({
     const KV = 0.9;        // follow the flow field (world-model agents, stay)
     const KP = 0.05;       // gather toward higher pressure (crowd build-up)
     const NOISE = 0.18;
-    const SPEED = 1.6;
+    const SPEED = 1.1;     // calmer baseline pace (speed toggle scales the clock)
     const GOAL_K = 1.15;   // goal pull (llm agents, stay)
     const LLM_FIELD = 0.35;
     const MOVE_K = 1.4;    // entry / exit steering strength
@@ -802,18 +854,33 @@ function Agents({
       const gy = cl(Math.floor(ny * G));
       const llmAgent = isLLM[i] === 1;
 
+      const exiting = phase === 2;
+      const hasEscaped = escaped[i] === 1;
+
       if (moving) {
         const ux = vx[gy][gx];
         const uy = vy[gy][gx];
         let dx: number, dy: number;
 
-        if (phase === 0 || phase === 2) {
-          // ENTRY: stream from the entrance to the stay spot.
-          // EXIT:  stream from wherever they are to the nearest gate.
-          const tgtX = phase === 0 ? home[i * 2] : exitTo[i * 2];
-          const tgtY = phase === 0 ? home[i * 2 + 1] : exitTo[i * 2 + 1];
+        if (exiting) {
+          // EXIT: funnel to the nearest gate, then keep going straight out of
+          // the venue boundary so the agent leaves the scene and vanishes.
+          if (!hasEscaped) {
+            const gd = Math.hypot(exitTo[i * 2] - nx, exitTo[i * 2 + 1] - ny);
+            if (gd < 0.07) escaped[i] = 1;
+          }
+          const tgtX = escaped[i] ? exitOut[i * 2] : exitTo[i * 2];
+          const tgtY = escaped[i] ? exitOut[i * 2 + 1] : exitTo[i * 2 + 1];
           let tx = tgtX - nx;
           let ty = tgtY - ny;
+          const dist = Math.hypot(tx, ty) || 1e-3;
+          tx /= dist; ty /= dist;
+          dx = tx * MOVE_K * speed[i] + (Math.random() - 0.5) * NOISE * 0.5;
+          dy = ty * MOVE_K * speed[i] + (Math.random() - 0.5) * NOISE * 0.5;
+        } else if (phase === 0) {
+          // ENTRY: stream from the entrance to the stay spot.
+          let tx = home[i * 2] - nx;
+          let ty = home[i * 2 + 1] - ny;
           const dist = Math.hypot(tx, ty) || 1e-3;
           if (dist < 0.02) { tx = Math.random() - 0.5; ty = Math.random() - 0.5; }
           else { tx /= dist; ty /= dist; }
@@ -838,17 +905,32 @@ function Agents({
 
         let cand_x = nx + dx * dt * SPEED;
         let cand_y = ny + dy * dt * SPEED;
-        if (isWall(walls, G, cand_x, ny)) cand_x = nx;
-        if (isWall(walls, G, nx, cand_y)) cand_y = ny;
 
-        nx = Math.min(0.985, Math.max(0.015, cand_x));
-        ny = Math.min(0.985, Math.max(0.015, cand_y));
+        // Free movement across the boundary while streaming IN (entry, still
+        // outside) or OUT (escaped, exit); otherwise stay inside, respect walls.
+        const outsideNow =
+          nx < 0.015 || nx > 0.985 || ny < 0.015 || ny > 0.985;
+        const freeMove = escaped[i] === 1 || (phase === 0 && outsideNow);
+        if (freeMove) {
+          nx = Math.min(1.7, Math.max(-0.7, cand_x));
+          ny = Math.min(1.7, Math.max(-0.7, cand_y));
+        } else {
+          if (isWall(walls, G, cand_x, ny)) cand_x = nx;
+          if (isWall(walls, G, nx, cand_y)) cand_y = ny;
+          nx = Math.min(0.985, Math.max(0.015, cand_x));
+          ny = Math.min(0.985, Math.max(0.015, cand_y));
+        }
         pos[i * 2] = nx;
         pos[i * 2 + 1] = ny;
       }
 
+      // Fade/shrink to nothing as the agent crosses the venue boundary.
+      const outside = Math.max(0, -nx, nx - 1, -ny, ny - 1);
+      const vis = Math.max(0, Math.min(1, 1 - outside / 0.12));
+
       const p = pr[gy][gx];
       dummy.position.set(wx(nx), llmAgent ? 0.42 : 0.35, wz(ny));
+      dummy.scale.setScalar(vis);
       dummy.updateMatrix();
 
       if (llmAgent) {
@@ -943,6 +1025,8 @@ export default function Venue3D({
   nPeople,
   frameRef,
   playingRef,
+  playing = true,
+  speed = 1,
   agentPlan,
   onPhase,
   maxAgents = 1400,
@@ -951,20 +1035,23 @@ export default function Venue3D({
   nPeople: number;
   frameRef: MutableRefObject<number>;
   playingRef: MutableRefObject<boolean>;
+  playing?: boolean;
+  speed?: number;
   agentPlan?: AgentPlan | null;
   onPhase?: (phase: CrowdPhase) => void;
   maxAgents?: number;
 }) {
   const count = Math.max(40, Math.min(maxAgents, nPeople || 600));
   const controlsRef = useRef<any>(null);
+  const [grabbed, setGrabbed] = useState(false);
+  const speedRef = useRef(speed);
+  useEffect(() => { speedRef.current = speed; }, [speed]);
 
   // Stop the cinematic auto-rotate as soon as the user grabs the scene.
   useEffect(() => {
     const c = controlsRef.current;
     if (!c) return;
-    const stop = () => {
-      c.autoRotate = false;
-    };
+    const stop = () => setGrabbed(true);
     c.addEventListener("start", stop);
     return () => c.removeEventListener("start", stop);
   }, []);
@@ -1002,6 +1089,7 @@ export default function Venue3D({
         count={count}
         frameRef={frameRef}
         playingRef={playingRef}
+        speedRef={speedRef}
         agentPlan={agentPlan}
         onPhase={onPhase}
       />
@@ -1009,7 +1097,7 @@ export default function Venue3D({
       <OrbitControls
         ref={controlsRef}
         makeDefault
-        autoRotate
+        autoRotate={playing && !grabbed}
         autoRotateSpeed={0.45}
         enablePan
         minDistance={SIZE * 0.4}

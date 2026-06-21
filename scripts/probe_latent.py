@@ -12,7 +12,7 @@ It also flags "unknown" dimensions: dims poorly explained by any known
 concept that nonetheless separate high-surprise (pre-anomaly) frames from
 calm frames. This replaces the previously hardcoded Discovery numbers.
 
-Output: probe_results.json  (consumed by backend /api/discover)
+Output: results/probe_results.json  (consumed by backend /api/discover)
 
 Run (unsandboxed — needs torch):
     python probe_latent.py
@@ -24,6 +24,14 @@ import json
 import os
 import numpy as np
 import torch
+
+# --- run from any cwd + import root-level modules ---
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+os.chdir(_ROOT)
 
 from flow_extractor import process_video_to_features
 from world_model import CrowdWorldModel
@@ -126,7 +134,7 @@ def _load_sequences(video_dir: str) -> list[np.ndarray]:
 
 
 def main(video_dir: str = "data/videos",
-         out_path: str = "probe_results.json") -> dict:
+         out_path: str = "results/probe_results.json") -> dict:
     wm = CrowdWorldModel(hidden_dim=WM_HIDDEN, n_layers=WM_LAYERS)
     # strict=False: shipped baselines may predate the feat_mean/feat_std buffers
     # (left at identity -> standardize() is a no-op, matching how they trained).
@@ -255,6 +263,7 @@ def main(video_dir: str = "data/videos",
         "table_md": table_md,
         "computed": True,
     }
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"[probe] ✓ saved {out_path}")

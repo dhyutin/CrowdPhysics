@@ -212,10 +212,10 @@ def _numpy_clean(obj: Any) -> Any:
 
 
 # Forecast horizon — how far the world model "imagines" ahead. Defaults to a
-# 2-minute look-ahead. The autoregressive rollout is sub-sampled to at most
+# 3-minute look-ahead. The autoregressive rollout is sub-sampled to at most
 # FORECAST_MAX_STEPS imagined steps (each representing horizon/steps seconds) so
 # the curve spans the full window without unbounded per-tick compute.
-FORECAST_HORIZON_S = float(os.environ.get("STREAM_FORECAST_HORIZON_S", "120"))
+FORECAST_HORIZON_S = float(os.environ.get("STREAM_FORECAST_HORIZON_S", "180"))
 FORECAST_MAX_STEPS = int(os.environ.get("STREAM_FORECAST_MAX_STEPS", "90"))
 
 
@@ -427,7 +427,7 @@ def _maybe_alert(venue: str, peak_physics: dict | None,
 
 # Minutes-ahead projection knobs (statistical trend, NOT the world-model rollout).
 # Defaults to the same 2-minute look-ahead as the world-model forecast.
-TREND_HORIZON_S = float(os.environ.get("FORECAST_TREND_HORIZON_S", "120"))
+TREND_HORIZON_S = float(os.environ.get("FORECAST_TREND_HORIZON_S", "180"))
 TREND_STEP_S = float(os.environ.get("FORECAST_TREND_STEP_S", "10"))
 TREND_FIT_WINDOW_S = float(os.environ.get("FORECAST_TREND_FIT_WINDOW_S", "60"))
 
@@ -2084,7 +2084,7 @@ def plan3d_refine(req: Plan3DRefineRequest):
 
 # ── GET /api/discover ─────────────────────────────────────────────────────────
 
-_PROBE_PATH = ROOT / "probe_results.json"
+_PROBE_PATH = ROOT / "results" / "probe_results.json"
 
 # Fallback used only if probe_latent.py hasn't been run (clearly marked).
 _PROBE_FALLBACK = {

@@ -46,6 +46,14 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+# --- run from any cwd + import root-level modules ---
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+os.chdir(_ROOT)
+
 from world_model import CrowdWorldModel
 from world_model_v2 import CrowdWorldModelV2
 from probe_latent import _physics_targets
@@ -189,9 +197,10 @@ def main():
 
     out = {"baseline": base_res, "vla": vla_res,
            "cv_splits": N_SPLITS, "gap_closed": bool(closed)}
-    with open("probe_mlp_results.json", "w") as f:
+    os.makedirs("results", exist_ok=True)
+    with open("results/probe_mlp_results.json", "w") as f:
         json.dump(out, f, indent=2)
-    print("\n[mlp] saved probe_mlp_results.json")
+    print("\n[mlp] saved results/probe_mlp_results.json")
 
 
 if __name__ == "__main__":

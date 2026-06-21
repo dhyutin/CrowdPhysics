@@ -29,6 +29,14 @@ import os
 import numpy as np
 import torch
 
+# --- run from any cwd + import root-level modules ---
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+os.chdir(_ROOT)
+
 from flow_extractor import process_video_to_features
 from world_model import CrowdWorldModel
 from world_model_v2 import CrowdWorldModelV2
@@ -191,9 +199,10 @@ def main():
            "recommendation": winner,
            "scores": {"baseline": round(base_score, 3),
                       "vla": round(vla_score, 3)}}
-    with open("probe_compare_results.json", "w") as f:
+    os.makedirs("results", exist_ok=True)
+    with open("results/probe_compare_results.json", "w") as f:
         json.dump(out, f, indent=2)
-    print("\n[compare] saved probe_compare_results.json")
+    print("\n[compare] saved results/probe_compare_results.json")
 
 
 if __name__ == "__main__":

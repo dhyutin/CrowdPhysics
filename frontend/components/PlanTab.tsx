@@ -8,6 +8,7 @@ import EventIntake, { type IntakeValue } from "@/components/EventIntake";
 import ScenarioCompare from "@/components/ScenarioCompare";
 import PlaybackBar from "@/components/PlaybackBar";
 import PlanPoints from "@/components/PlanPoints";
+import { buildVenuePins, hasAccessPoints, assumedAccessElements } from "@/lib/venuePins";
 
 import type { CrowdPhase } from "@/components/Venue3D";
 
@@ -91,6 +92,8 @@ export default function PlanTab() {
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [phase, setPhase] = useState<CrowdPhase>(0);
+  const [speedMul, setSpeedMul] = useState(0.5); // animation speed (slower default)
+  const [assumedAccess, setAssumedAccess] = useState(false);
 
   // "Fix the scene" chat: correct the reconstruction in plain language.
   type ChatMsg = { role: "user" | "agent"; text: string };
@@ -114,8 +117,9 @@ export default function PlanTab() {
   }, [result, selectedId]);
 
   const frames = selected?.field.frames ?? 0;
+  const pins = useMemo(() => buildVenuePins(selected?.layout), [selected]);
 
-  // Advance the playback head while playing.
+  // Advance the playback head while playing (speed toggle scales the rate).
   useEffect(() => {
     if (!selected || !playing || frames <= 1) return;
     const id = setInterval(() => {
@@ -124,9 +128,9 @@ export default function PlanTab() {
         frameRef.current = next;
         return next;
       });
-    }, 110);
+    }, Math.round(110 / Math.max(0.1, speedMul)));
     return () => clearInterval(id);
-  }, [selected, playing, frames]);
+  }, [selected, playing, frames, speedMul]);
 
   function patchIntake(patch: Partial<IntakeValue>) {
     setIntake((v) => ({ ...v, ...patch }));
@@ -147,6 +151,20 @@ export default function PlanTab() {
 
   // Reset playback to the recommended scenario of a fresh result.
   function applyResult(res: Plan3DResult) {
+    // If the photo / user gave no entrances or exits, assume sensible ones so
+    // the crowd can stream in and out — flagged so the user can correct them.
+    const missing = !hasAccessPoints(res.layout);
+    if (missing) {
+      const assumed = assumedAccessElements();
+      const inject = (l: Plan3DResult["layout"]) =>
+        hasAccessPoints(l) ? l : { ...l, elements: [...(l.elements ?? []), ...assumed] };
+      res = {
+        ...res,
+        layout: inject(res.layout),
+        scenarios: res.scenarios.map((s) => ({ ...s, layout: inject(s.layout) })),
+      };
+    }
+    setAssumedAccess(missing);
     setResult(res);
     setSelectedId(res.best_scenario_id);
     frameRef.current = 0;
@@ -437,6 +455,28 @@ export default function PlanTab() {
           </div>
         )}
 
+        {result && assumedAccess && (
+          <div
+            className="card border px-4 py-3 animate-fade-in flex items-start gap-3"
+            style={{ background: "rgba(68,147,248,0.06)", borderColor: "rgba(68,147,248,0.35)" }}
+          >
+            <svg className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: "#4493F8" }} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.8">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+            </svg>
+            <div className="flex-1 min-w-0">
+              <p className="font-mono text-[10px] uppercase tracking-wider mb-1" style={{ color: "#4493F8" }}>
+                Entrances &amp; exits assumed
+              </p>
+              <p className="text-xs text-text2 leading-relaxed">
+                No entry/exit was detected, so the crowd uses an assumed entry (north)
+                and exits (south &amp; east). If that&apos;s wrong, fix it in{" "}
+                <span className="text-text1">“Fix the 3D Scene”</span> below — e.g.{" "}
+                <span className="text-text1">“the entrance is on the west side”</span>.
+              </p>
+            </div>
+          </div>
+        )}
+
         {!result && !loading ? (
           <div className="card flex-1 min-h-80 flex flex-col items-center justify-center gap-3 text-text3 px-6 text-center">
             <svg className="w-12 h-12 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
@@ -468,6 +508,8 @@ export default function PlanTab() {
                     nPeople={result!.n_people}
                     frameRef={frameRef}
                     playingRef={playingRef}
+                    playing={playing}
+                    speed={speedMul}
                     agentPlan={result!.agent_plan}
                     onPhase={setPhase}
                   />
@@ -519,22 +561,61 @@ export default function PlanTab() {
                       </div>
                     ) : null}
                   </div>
+                  {pins.length > 0 && (
+                    <div className="absolute bottom-3 left-3 bg-void/80 px-2.5 py-2 rounded pointer-events-none max-w-[55%]">
+                      <p className="font-mono text-[8px] uppercase tracking-wider text-text3 mb-1">
+                        Access points{assumedAccess ? " · assumed" : ""}
+                      </p>
+                      <div className="flex flex-col gap-1">
+                        {pins.map((pin) => (
+                          <div key={pin.n} className="flex items-center gap-1.5">
+                            <span
+                              className="flex items-center justify-center w-3.5 h-3.5 rounded-full flex-shrink-0 text-[7px] font-bold"
+                              style={{ background: pin.color, color: "#0D1117", border: "1px solid rgba(255,255,255,0.85)" }}
+                            >
+                              {pin.n}
+                            </span>
+                            <span className="font-mono text-[8px] text-text2 truncate">{pin.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {result!.n_people > 1400 && (
-                    <div className="absolute bottom-3 left-3 bg-void/80 px-2 py-1 rounded pointer-events-none">
+                    <div className="absolute bottom-3 right-3 bg-void/80 px-2 py-1 rounded pointer-events-none">
                       <span className="font-mono text-[8px] text-text3">
                         showing 1,400 of {result!.n_people.toLocaleString()} agents
                       </span>
                     </div>
                   )}
                 </div>
-                <div className="p-3 border-t border-border">
-                  <PlaybackBar
-                    frame={frame}
-                    frames={frames}
-                    playing={playing}
-                    onToggle={togglePlay}
-                    onScrub={onScrub}
-                  />
+                <div className="p-3 border-t border-border flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <PlaybackBar
+                      frame={frame}
+                      frames={frames}
+                      playing={playing}
+                      onToggle={togglePlay}
+                      onScrub={onScrub}
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <span className="font-mono text-[9px] text-text3 mr-0.5">Speed</span>
+                    {[0.25, 0.5, 1, 2].map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setSpeedMul(s)}
+                        className={`font-mono text-[10px] px-1.5 py-0.5 rounded transition-colors ${
+                          speedMul === s
+                            ? "bg-lavender/20 text-lavender border border-lavender/40"
+                            : "bg-surface text-text3 border border-border hover:text-text2"
+                        }`}
+                      >
+                        {s}×
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 

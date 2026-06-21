@@ -12,6 +12,14 @@ WM_HIDDEN_DIM / WM_N_LAYERS (defaults 512/3, the GPU-trained config).
 import os
 import torch
 
+# --- run from any cwd + import root-level modules ---
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+os.chdir(_ROOT)
+
 from world_model import CrowdWorldModel
 from dyna_trainer import DynaTrainer
 from metrics_logger import MetricsLogger

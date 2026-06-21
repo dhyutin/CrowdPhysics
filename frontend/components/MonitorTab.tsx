@@ -10,6 +10,7 @@ import {
   type MonitorResult,
   type TimelinePoint,
   type Forecast,
+  type Trend,
   type Hotspot,
   type CaptureSource,
   type LiveTick,
@@ -28,6 +29,22 @@ function youtubeId(url: string): string | null {
   const m = url.match(
     /(?:[?&]v=|youtu\.be\/|\/live\/|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/);
   return m ? m[1] : null;
+}
+
+// The displayed crowd projection. The world-model latent rollout is only
+// meaningful a few seconds out (it collapses toward the mean), so for the
+// minutes-ahead CURVE we prefer the statistical TREND projection, while keeping
+// the world model's IMAGINED FIELD for the visual. Falls back to whichever
+// exists; `prevField` keeps the last imagined field between forecast refreshes.
+function mergeProjection(
+  trend: Trend | null | undefined,
+  forecast: Forecast | null | undefined,
+  prevField?: string
+): Forecast | null {
+  const f = forecast && !forecast.error ? forecast : null;
+  const base = (trend ?? f) as Forecast | null;
+  if (!base) return null;
+  return { ...base, projected_field_b64: f?.projected_field_b64 ?? prevField };
 }
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
@@ -350,7 +367,13 @@ export default function MonitorTab() {
           setLiveNow(pt.time);
           setLiveStatus(pt.status);
           setLiveScore(pt.score);
-          if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
+          // Update the minutes-ahead projection every tick (trend curve +
+          // latest imagined field), so the right side keeps moving live.
+          if (ev.trend || (ev.forecast && !ev.forecast.error)) {
+            setLiveForecast((prev) =>
+              mergeProjection(ev.trend, ev.forecast, prev?.projected_field_b64) ?? prev
+            );
+          }
           if (ev.hotspot) setLiveHotspot(ev.hotspot);
           if (ev.frame_b64) setLiveFrame(ev.frame_b64);
           // Pair the real frame with its pressure field for slow sync replay.
@@ -396,7 +419,9 @@ export default function MonitorTab() {
             agent_trace: ev.agent_trace ?? [],
             source: capturedSource,
           });
-          if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
+          setLiveForecast((prev) =>
+            mergeProjection(ev.trend, ev.forecast, prev?.projected_field_b64) ?? prev
+          );
           if (ev.hotspot) setLiveHotspot(ev.hotspot);
           if (ev.counterfactual && !ev.counterfactual.error)
             setCounterfactual(ev.counterfactual);
@@ -1040,7 +1065,11 @@ export default function MonitorTab() {
                     </div>
                   </div>
                   <div className="absolute bottom-3 right-3 font-mono text-[9px] text-text3 bg-void/70 px-2 py-1 rounded flex items-center gap-1.5">
-                    <span className="dot-live" /> Imagined field · +{liveForecast.horizon_s}s
+                    <span className="dot-live" /> Imagined field · +{
+                      (liveForecast.horizon_s ?? 0) >= 90
+                        ? `${Math.round((liveForecast.horizon_s ?? 0) / 60)} min`
+                        : `${liveForecast.horizon_s ?? 0}s`
+                    }
                   </div>
                 </>
               ) : (
@@ -1071,9 +1100,13 @@ export default function MonitorTab() {
               </div>
             )}
 
-            {/* Forecast — potential future of the crowd (rolling while live) */}
+            {/* Forecast — potential future of the crowd (rolling while live).
+                Minutes-ahead trend curve + world-model imagined field. */}
             {(() => {
-              const fc = result?.forecast ?? liveForecast;
+              const fc = result
+                ? mergeProjection(result.trend, result.forecast,
+                                  liveForecast?.projected_field_b64)
+                : liveForecast;
               return fc && !fc.error ? <ForecastPanel forecast={fc} /> : null;
             })()}
 
