@@ -47,29 +47,49 @@ _YT_ID_PATTERNS = [
 ]
 
 
-def normalize_stream_url(url: str) -> str:
-    """
-    Rewrite a YouTube watch/share/shorts/live link into the privacy-enhanced
-    embed player URL. The embed player plays public videos with autoplay and
-    NO sign-in / "confirm you're not a bot" wall, which is what blocks the
-    raw watch page inside a cloud browser. Non-YouTube URLs are returned as-is.
-    """
+def youtube_video_id(url: str) -> str | None:
+    """Return the 11-char YouTube video id from any common link shape, else None."""
     if not url or "youtu" not in url.lower():
-        return url
-    vid = None
+        return None
     for pat in _YT_ID_PATTERNS:
         m = pat.search(url)
         if m:
-            vid = m.group(1)
-            break
-    if not vid:
-        return url
-    # youtube-nocookie avoids the cookie-consent redirect; mute=1 is required
-    # for autoplay to be allowed by the browser.
-    return (
-        f"https://www.youtube-nocookie.com/embed/{vid}"
-        "?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1"
+            return m.group(1)
+    return None
+
+
+def _load_youtube_embed(page, video_id: str, nav_timeout_ms: int = 60000) -> None:
+    """
+    Play a YouTube video inside a cloud browser without the sign-in wall AND
+    without the "Error 153 / player configuration" failure.
+
+    Navigating straight to the embed URL loads it as a TOP-LEVEL document with
+    no valid parent origin, which YouTube's player rejects (Error 153). Instead
+    we land on youtube.com (an origin YouTube always allows to embed) and inject
+    a full-viewport <iframe> embed into it, so the player gets a valid origin.
+    """
+    page.goto("https://www.youtube.com", wait_until="domcontentloaded",
+              timeout=nav_timeout_ms)
+    time.sleep(1.0)
+    _dismiss_consent(page)
+    page.evaluate(
+        """(id) => {
+            document.documentElement.style.margin = '0';
+            document.body.innerHTML = '';
+            document.body.style.cssText = 'margin:0;background:#000;overflow:hidden';
+            const f = document.createElement('iframe');
+            f.src = 'https://www.youtube.com/embed/' + id +
+                '?autoplay=1&mute=1&playsinline=1&rel=0&controls=0&modestbranding=1';
+            f.allow = 'autoplay; encrypted-media; fullscreen';
+            f.setAttribute('frameborder', '0');
+            f.style.cssText =
+                'position:fixed;inset:0;width:100vw;height:100vh;border:0';
+            document.body.appendChild(f);
+        }""",
+        video_id,
     )
+    # Give the embedded player time to negotiate and start buffering.
+    time.sleep(3.0)
 
 
 def _dismiss_consent(page) -> None:
@@ -167,7 +187,7 @@ def start_live_session(url: str, viewport=(1280, 720),
         raise RuntimeError(
             "BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
 
-    url = normalize_stream_url(url)
+    vid = youtube_video_id(url)
 
     # keepAlive so the session survives the Playwright disconnect below and
     # the live-view URL stays valid for embedding in the frontend.
@@ -188,11 +208,14 @@ def start_live_session(url: str, viewport=(1280, 720),
             page = context.pages[0] if context.pages else context.new_page()
             page.set_viewport_size(
                 {"width": viewport[0], "height": viewport[1]})
-            page.goto(url, wait_until="domcontentloaded",
-                      timeout=nav_timeout_ms)
-            time.sleep(2.0)
-            _dismiss_consent(page)
-            _try_start_playback(page)
+            if vid:
+                _load_youtube_embed(page, vid, nav_timeout_ms)
+            else:
+                page.goto(url, wait_until="domcontentloaded",
+                          timeout=nav_timeout_ms)
+                time.sleep(2.0)
+                _dismiss_consent(page)
+                _try_start_playback(page)
             # Intentionally NOT calling browser.close().
     except Exception:
         if sid:
@@ -269,7 +292,7 @@ def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
         raise RuntimeError(
             "BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
 
-    url = normalize_stream_url(url)
+    vid = youtube_video_id(url)
     own_session = connect_url is None
     sid_to_release: str | None = None
     if own_session:
@@ -293,12 +316,16 @@ def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
                 page.set_viewport_size(
                     {"width": viewport[0], "height": viewport[1]})
                 if navigate:
-                    page.goto(url, wait_until="domcontentloaded",
-                              timeout=nav_timeout_ms)
-                    time.sleep(settle_s)
-                    _dismiss_consent(page)
-                    _try_start_playback(page)
-                    time.sleep(1.0)
+                    if vid:
+                        _load_youtube_embed(page, vid, nav_timeout_ms)
+                        time.sleep(settle_s)
+                    else:
+                        page.goto(url, wait_until="domcontentloaded",
+                                  timeout=nav_timeout_ms)
+                        time.sleep(settle_s)
+                        _dismiss_consent(page)
+                        _try_start_playback(page)
+                        time.sleep(1.0)
                 else:
                     # Warm session — page already loaded; just ensure playback.
                     _try_start_playback(page)
