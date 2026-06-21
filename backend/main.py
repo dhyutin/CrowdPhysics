@@ -39,7 +39,6 @@ setup_tracing()
 
 from flow_extractor import (
     extract_flow,
-    extract_farneback_flow,
     flow_to_features,
     render_pressure_field,
 )
@@ -143,13 +142,16 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
     _detector.buf.clear()
 
     timeline: list = []
-    peak_frame = None
+    peak_flow = None          # cheapest source — render only the peak, once
     peak_score = -999.0
     peak_physics = None
     last_claude = "Calibrating..."
     last_rl = ""
     did_claude = False
 
+    # ── DETECTION PASS (no rendering) ────────────────────────────────────────
+    # Single optical flow per frame; the expensive pressure-field render is
+    # deferred to the peak frame only (was previously done every frame).
     prev_frame = frames[0]
     for step, curr in enumerate(frames[1:]):
         sm_curr = cv2.resize(curr, (320, 240))
@@ -158,13 +160,6 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
         flow = extract_flow(sm_prev, sm_curr)
         features = flow_to_features(flow)
         physics = _detector.process_frame(features)
-
-        disp_flow = extract_farneback_flow(
-            cv2.resize(prev_frame, (640, 480)),
-            cv2.resize(curr, (640, 480)),
-        )
-        canvas, _ = render_pressure_field(disp_flow, physics,
-                                          frame_shape=(480, 640))
 
         timeline.append({
             "time":        round(step / fps, 1),
@@ -175,7 +170,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
 
         if physics["score"] > peak_score:
             peak_score = physics["score"]
-            peak_frame = canvas.copy()
+            peak_flow = flow      # new array each iteration — safe to keep ref
             peak_physics = {k: v for k, v in physics.items()
                             if k != "z_latent"}
 
@@ -190,6 +185,12 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
                 last_claude = f"Claude error: {exc}"
 
         prev_frame = curr
+
+    # ── RENDER PEAK FRAME ONLY ───────────────────────────────────────────────
+    peak_frame = None
+    if peak_flow is not None:
+        peak_frame, _ = render_pressure_field(
+            peak_flow, peak_physics, frame_shape=(480, 640))
 
     danger_n = sum(1 for p in timeline if p["status"] == "DANGER")
     total = len(timeline)
