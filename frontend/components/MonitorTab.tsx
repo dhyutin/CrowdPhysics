@@ -161,7 +161,9 @@ export default function MonitorTab() {
   const [liveSession, setLiveSession] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewErr, setPreviewErr]   = useState<string | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  // Continuous live monitoring: once the preview session is warm we keep
+  // capturing + analysing on a loop until the user stops.
+  const [monitoring, setMonitoring]   = useState(false);
 
   // Object URL for previewing the uploaded video locally.
   const objectUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
@@ -177,6 +179,8 @@ export default function MonitorTab() {
   async function startPreview() {
     const u = liveUrl.trim();
     if (!u) return;
+    setMonitoring(false);
+    abortRef.current?.abort();
     if (liveSession) endLiveSession(liveSession);
     setLiveView(null);
     setLiveSession(null);
@@ -187,6 +191,9 @@ export default function MonitorTab() {
       const s = await startLiveSession(u);
       setLiveView(s.live_view_url);
       setLiveSession(s.session_id);
+      // As soon as the live session is warm, begin analysing automatically —
+      // no Monitor click required. The loop effect picks this up.
+      setMonitoring(true);
     } catch (e: unknown) {
       setPreviewErr(String(e));
     } finally {
@@ -194,11 +201,23 @@ export default function MonitorTab() {
     }
   }
 
+  function stopMonitoring() {
+    setMonitoring(false);
+    abortRef.current?.abort();
+    setStreaming(false);
+    setLoad(false);
+    setLivePhase("Stopped");
+  }
+
   function switchMode(next: "upload" | "live") {
-    if (next === "upload" && liveSession) {
-      endLiveSession(liveSession);
-      setLiveSession(null);
-      setLiveView(null);
+    if (next === "upload") {
+      setMonitoring(false);
+      abortRef.current?.abort();
+      if (liveSession) {
+        endLiveSession(liveSession);
+        setLiveSession(null);
+        setLiveView(null);
+      }
     }
     setMode(next);
   }
@@ -284,12 +303,11 @@ export default function MonitorTab() {
       if (mode === "upload") {
         await streamAnalyze(file!, venue, onEvent, ac.signal);
       } else {
+        // keepSession=true keeps the warm Browserbase session alive so the
+        // live-view iframe never goes dark and the next loop reuses it.
         await streamMonitorUrl(
           liveUrl.trim(), venue || "Live Camera", onEvent, 35,
-          liveSession ?? undefined, ac.signal);
-        // The warm session was consumed by the capture.
-        setLiveSession(null);
-        setLiveView(null);
+          liveSession ?? undefined, ac.signal, true);
       }
     } catch (e: unknown) {
       if (!ac.signal.aborted) setError(String(e));
@@ -299,16 +317,22 @@ export default function MonitorTab() {
     }
   }
 
-  // Live auto-refresh: after a successful live capture, re-run on an interval
-  // so the flow GIF keeps updating. (Browserbase capture takes ~30-60s, so a
-  // true real-time stream isn't practical — this re-captures periodically.)
+  // Continuous live loop: while monitoring is on and we have a warm session,
+  // kick off an analysis pass whenever none is running. When a pass ends
+  // (streaming flips false) this re-fires and starts the next one, so live
+  // monitoring never stops until the user hits Stop. A short gap between
+  // passes keeps the session healthy and avoids a tight error spin.
   const handleRunRef = useRef(handleRun);
   handleRunRef.current = handleRun;
   useEffect(() => {
-    if (!autoRefresh || mode !== "live" || loading || streaming || !result) return;
-    const id = setTimeout(() => handleRunRef.current(), 30000);
+    if (mode !== "live" || !monitoring || streaming || !liveSession) return;
+    // Back off if the previous pass errored so we don't hammer the API.
+    const delay = error ? 5000 : 1200;
+    const id = setTimeout(() => {
+      if (!streaming) handleRunRef.current();
+    }, delay);
     return () => clearTimeout(id);
-  }, [autoRefresh, mode, loading, streaming, result]);
+  }, [mode, monitoring, streaming, liveSession, error]);
 
   const peakStatus = result?.timeline?.reduce((worst, p) => {
     const rank = { DANGER: 3, WARNING: 2, SAFE: 1, CALIBRATING: 0 };
@@ -382,33 +406,33 @@ export default function MonitorTab() {
                   }
                 }}
               />
-              <button
-                className="btn-secondary w-full text-[11px]"
-                disabled={!liveUrl.trim() || previewLoading}
-                onClick={startPreview}
-              >
-                {previewLoading ? (
-                  <><span className="spinner-white" /> Opening browser…</>
-                ) : (
-                  <>Load live preview</>
-                )}
-              </button>
+              {monitoring ? (
+                <button
+                  className="btn-secondary w-full text-[11px] !border-crimson/40 !text-crimson"
+                  onClick={stopMonitoring}
+                >
+                  <span className="w-2.5 h-2.5 rounded-[2px] bg-crimson inline-block" />
+                  Stop monitoring
+                </button>
+              ) : (
+                <button
+                  className="btn-primary w-full text-[11px]"
+                  disabled={!liveUrl.trim() || previewLoading}
+                  onClick={startPreview}
+                >
+                  {previewLoading ? (
+                    <><span className="spinner-white" /> Connecting…</>
+                  ) : (
+                    <><span className="dot-live" /> Start live monitor</>
+                  )}
+                </button>
+              )}
               <p className="font-mono text-[9px] text-text3 leading-snug">
-                Opens a Browserbase cloud browser so you can watch the feed,
-                then <span className="text-teal">Monitor Live</span> captures &amp;
-                analyzes it (~30–60s).
+                Opens a Browserbase cloud browser and{" "}
+                <span className="text-teal">analyzes automatically</span> as soon
+                as the feed is live — then keeps monitoring on a loop. No clicks
+                needed.
               </p>
-              <label className="flex items-center gap-2 cursor-pointer select-none mt-0.5">
-                <input
-                  type="checkbox"
-                  checked={autoRefresh}
-                  onChange={(e) => setAutoRefresh(e.target.checked)}
-                  className="accent-teal w-3 h-3"
-                />
-                <span className="font-mono text-[10px] text-text2">
-                  Auto-refresh flow (~30s)
-                </span>
-              </label>
             </div>
           )}
 
@@ -422,19 +446,19 @@ export default function MonitorTab() {
             />
           </div>
 
-          <button
-            className="btn-primary w-full"
-            disabled={!canRun || loading}
-            onClick={handleRun}
-          >
-            {loading ? (
-              <><span className="spinner-white" /> {mode === "live" ? "Capturing…" : "Analyzing…"}</>
-            ) : mode === "live" ? (
-              <><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 12.5A5.5 5.5 0 118 2.5a5.5 5.5 0 010 11z" opacity="0.5"/></svg> Monitor Live</>
-            ) : (
-              <><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16"><path d="M6 3l8 5-8 5V3z"/></svg> Run Analysis</>
-            )}
-          </button>
+          {mode === "upload" && (
+            <button
+              className="btn-primary w-full"
+              disabled={!canRun || loading}
+              onClick={handleRun}
+            >
+              {loading ? (
+                <><span className="spinner-white" /> Analyzing…</>
+              ) : (
+                <><svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16"><path d="M6 3l8 5-8 5V3z"/></svg> Run Analysis</>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Pipeline */}
@@ -446,7 +470,6 @@ export default function MonitorTab() {
               "8×8 Grid → 256-dim",
               "CNN Encoder → 64-dim",
               "LSTM World Model",
-              "CQL RL Policy",
               "Claude Sonnet 4.6",
             ].map((s, i) => <PipelineStep key={s} n={i + 1} label={s} />)}
           </div>
@@ -458,9 +481,16 @@ export default function MonitorTab() {
         <div className="flex items-center justify-between">
           <p className="panel-label">{mode === "live" ? "Live Source" : "Source Video"}</p>
           {mode === "live" && liveView && (
-            <span className="font-mono text-[9px] text-teal flex items-center gap-1.5">
-              <span className="dot-live" /> STREAMING
-            </span>
+            monitoring ? (
+              <span className="font-mono text-[9px] text-teal flex items-center gap-1.5">
+                <span className="dot-live" />
+                {streaming ? "STREAMING · ANALYZING" : "STREAMING"}
+              </span>
+            ) : (
+              <span className="font-mono text-[9px] text-text3 flex items-center gap-1.5">
+                PAUSED
+              </span>
+            )
           )}
         </div>
 
@@ -510,10 +540,48 @@ export default function MonitorTab() {
               <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
               </svg>
-              <p className="font-mono text-xs">Click “Load live preview” to watch the feed</p>
+              <p className="font-mono text-xs">Click “Start live monitor” to open and analyze the feed</p>
               {previewErr && (
                 <p className="font-mono text-[9px] text-crimson/80 break-all">{previewErr}</p>
               )}
+            </div>
+          )}
+
+          {/* Danger marker overlaid on the live feed (driven by live ticks) */}
+          {mode === "live" && liveView &&
+            (liveStatus === "DANGER" || liveStatus === "WARNING") && (
+            <div className="pointer-events-none absolute inset-0 z-10">
+              <div
+                className={`absolute inset-0 rounded-xl border-2 ${
+                  liveStatus === "DANGER"
+                    ? "border-crimson animate-pulse"
+                    : "border-amber"
+                }`}
+                style={{
+                  boxShadow:
+                    liveStatus === "DANGER"
+                      ? "inset 0 0 60px rgba(248,81,73,0.25)"
+                      : "inset 0 0 40px rgba(210,153,34,0.18)",
+                }}
+              />
+              <div className="absolute top-3 left-1/2 -translate-x-1/2">
+                <div
+                  className={liveStatus === "DANGER" ? "badge-danger" : "badge-warning"}
+                >
+                  <span
+                    className={liveStatus === "DANGER" ? "dot-danger" : "dot-warning"}
+                  />
+                  {liveStatus === "DANGER" ? "DANGER DETECTED" : "ELEVATED RISK"} ·{" "}
+                  {liveScore.toFixed(1)}σ
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Live analyzing pill */}
+          {mode === "live" && liveView && streaming && (
+            <div className="pointer-events-none absolute bottom-3 left-3 z-10 font-mono text-[9px] text-text2 bg-void/75 px-2 py-1 rounded flex items-center gap-1.5">
+              <span className="dot-live" /> Analyzing · T+{liveNow.toFixed(1)}s
             </div>
           )}
         </div>
@@ -542,7 +610,7 @@ export default function MonitorTab() {
           ) : null}
         </div>
 
-        {!result && !loading && !streaming ? (
+        {!result && !loading && !streaming && !monitoring ? (
           /* Empty analysis state */
           <div className="card flex-1 min-h-80 flex flex-col items-center justify-center gap-3 text-text3">
             <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1">
@@ -550,7 +618,7 @@ export default function MonitorTab() {
             </svg>
             <p className="font-mono text-xs text-center px-6">
               {mode === "live"
-                ? "Click “Monitor Live” to analyze the feed"
+                ? "Click “Start live monitor” — analysis begins automatically"
                 : "Click “Run Analysis” to analyze this video"}
             </p>
           </div>
@@ -672,7 +740,7 @@ export default function MonitorTab() {
                 <p className="panel-label">Situational Awareness</p>
                 <span className="badge-teal text-[9px] px-1.5 py-0.5">Claude</span>
               </div>
-              <div className="p-4 text-xs text-text2 leading-relaxed">
+              <div className="p-4 text-xs text-text2 leading-relaxed max-h-56 overflow-y-auto">
                 {result ? (
                   <p className="whitespace-pre-wrap">{result.claude_briefing}</p>
                 ) : streaming ? (

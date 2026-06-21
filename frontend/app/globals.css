@@ -41,8 +41,8 @@ body {
 .spinner {
   display: inline-block;
   width: 14px; height: 14px;
-  border: 2px solid rgba(68,147,248,0.2);
-  border-top-color: #4493F8;
+  border: 2px solid rgba(226,169,241,0.2);
+  border-top-color: #e2a9f1;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
   flex-shrink: 0;
@@ -99,17 +99,17 @@ body {
            px-4 py-2 rounded-lg text-sm font-semibold
            text-white transition-all duration-150
            disabled:opacity-40 disabled:cursor-not-allowed select-none;
-    background: linear-gradient(135deg, #4493F8 0%, #1F6FEB 100%);
-    box-shadow: 0 1px 3px rgba(68,147,248,0.25), inset 0 1px 0 rgba(255,255,255,0.08);
+    background: linear-gradient(135deg, #7c3df3 0%, #5e17eb 100%);
+    box-shadow: 0 1px 3px rgba(94,23,235,0.3), inset 0 1px 0 rgba(255,255,255,0.12);
   }
   .btn-primary:not(:disabled):hover {
-    background: linear-gradient(135deg, #5BA3F9 0%, #4493F8 100%);
-    box-shadow: 0 2px 10px rgba(68,147,248,0.35);
+    background: linear-gradient(135deg, #9460f6 0%, #6d29ee 100%);
+    box-shadow: 0 2px 14px rgba(94,23,235,0.45);
     transform: translateY(-1px);
   }
   .btn-primary:not(:disabled):active {
     transform: translateY(0);
-    box-shadow: 0 1px 3px rgba(68,147,248,0.15);
+    box-shadow: 0 1px 3px rgba(94,23,235,0.2);
   }
 
   .btn-secondary {
@@ -173,11 +173,11 @@ body {
   }
   .upload-zone:hover {
     @apply border-teal/50 text-teal;
-    background: rgba(68,147,248,0.04);
+    background: rgba(226,169,241,0.05);
   }
   .upload-zone.has-file {
     @apply border-teal/40 text-teal;
-    background: rgba(68,147,248,0.06);
+    background: rgba(226,169,241,0.07);
   }
 
   /* ── Code block ──────────────────────────────────── */

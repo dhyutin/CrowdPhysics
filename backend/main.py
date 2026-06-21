@@ -859,9 +859,10 @@ def end_live_session(req: EndSessionRequest):
 
 class MonitorURLRequest(BaseModel):
     url: str
-    venue:      str = "Live Camera"
-    n_frames:   int = 45
-    session_id: str | None = None
+    venue:        str = "Live Camera"
+    n_frames:     int = 45
+    session_id:   str | None = None
+    keep_session: bool = False  # keep the warm session alive for continuous looping
 
 
 @app.post("/api/monitor_url")
@@ -945,11 +946,15 @@ def monitor_url_stream(req: MonitorURLRequest):
 
     try:
         if warm:
+            # When keeping the session alive (continuous live looping), don't
+            # release it so the live-view iframe stays connected and the next
+            # capture pass can reuse the same warm session.
             frames, fps = capture_frames(
                 req.url, n_frames=n_frames,
                 connect_url=warm["connect_url"], navigate=False,
-                release_session_id=req.session_id)
-            _live_sessions.pop(req.session_id, None)
+                release_session_id=None if req.keep_session else req.session_id)
+            if not req.keep_session:
+                _live_sessions.pop(req.session_id, None)
         else:
             frames, fps = capture_frames(req.url, n_frames=n_frames)
     except Exception as exc:

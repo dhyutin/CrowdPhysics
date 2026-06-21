@@ -34,8 +34,8 @@ function StepIcon({ icon, danger }: { icon: string; danger: boolean }) {
     <div
       className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 border"
       style={{
-        background: danger ? "rgba(248,81,73,0.1)" : "rgba(68,147,248,0.08)",
-        borderColor: danger ? "rgba(248,81,73,0.3)" : "rgba(68,147,248,0.2)",
+        background: danger ? "rgba(248,81,73,0.1)" : "rgba(94,23,235,0.10)",
+        borderColor: danger ? "rgba(248,81,73,0.3)" : "rgba(94,23,235,0.28)",
       }}
     >
       <svg

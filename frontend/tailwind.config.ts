@@ -16,7 +16,9 @@ const config: Config = {
         border:  "#21262D",
 
         // Accent / status
-        teal:    "#4493F8",   // professional blue (primary CTA)
+        teal:    "#e2a9f1",   // light lavender (primary accent / highlight)
+        violet:  "#5e17eb",   // deep violet (primary CTA / fills)
+        lavender:"#e2a9f1",   // alias of the light accent
         emerald: "#3FB950",   // safe green
         amber:   "#D29922",   // warning amber
         crimson: "#F85149",   // danger red

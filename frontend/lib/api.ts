@@ -155,12 +155,19 @@ export async function streamMonitorUrl(
   onEvent: (ev: LiveTick) => void,
   nFrames = 35,
   sessionId?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  keepSession = false
 ): Promise<void> {
   const res = await fetch(`${BASE}/api/monitor_url_stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, venue, n_frames: nFrames, session_id: sessionId ?? null }),
+    body: JSON.stringify({
+      url,
+      venue,
+      n_frames: nFrames,
+      session_id: sessionId ?? null,
+      keep_session: keepSession,
+    }),
     signal,
   });
   await consumeStream(res, onEvent);

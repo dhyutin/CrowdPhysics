@@ -42,7 +42,7 @@ function Landing({ onEnter }: { onEnter: (m: Mode) => void }) {
         className="pointer-events-none fixed inset-0 opacity-60"
         style={{
           background:
-            "radial-gradient(900px 500px at 50% -10%, rgba(68,147,248,0.10), transparent 70%), radial-gradient(700px 400px at 100% 100%, rgba(45,212,191,0.06), transparent 70%)",
+            "radial-gradient(900px 500px at 50% -10%, rgba(94,23,235,0.14), transparent 70%), radial-gradient(700px 400px at 100% 100%, rgba(226,169,241,0.08), transparent 70%)",
         }}
       />
       <div className="relative flex-1 flex flex-col items-center justify-center px-6 py-16 max-w-5xl mx-auto w-full">
@@ -56,7 +56,7 @@ function Landing({ onEnter }: { onEnter: (m: Mode) => void }) {
         />
 
         <h1 className="display text-2xl sm:text-3xl font-bold text-center text-text1 leading-tight max-w-3xl">
-          See the crowd&apos;s future <span style={{ color: "#4493F8" }}>before</span> it becomes a crisis.
+          See the crowd&apos;s future <span style={{ color: "#e2a9f1" }}>before</span> it becomes a crisis.
         </h1>
         <p className="text-text3 text-center mt-4 max-w-xl text-sm leading-relaxed">
           A world model learns crowd fluid dynamics from raw video. Agents read the
@@ -75,7 +75,7 @@ function Landing({ onEnter }: { onEnter: (m: Mode) => void }) {
                 style={{ borderColor: "#21262D" }}
               >
                 <div className="w-12 h-12 rounded-xl flex items-center justify-center text-teal mb-4 border border-teal/20"
-                  style={{ background: "rgba(68,147,248,0.08)" }}>
+                  style={{ background: "rgba(94,23,235,0.10)" }}>
                   {meta.icon}
                 </div>
                 <div className="flex items-center gap-2">
@@ -140,7 +140,7 @@ export default function Home() {
               className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
                 mode === m ? "text-teal" : "text-text3 hover:text-text2"
               }`}
-              style={mode === m ? { background: "rgba(68,147,248,0.10)", border: "1px solid rgba(68,147,248,0.25)" } : { border: "1px solid transparent" }}
+              style={mode === m ? { background: "rgba(94,23,235,0.12)", border: "1px solid rgba(94,23,235,0.30)" } : { border: "1px solid transparent" }}
             >
               <span className="w-3.5 h-3.5">{MODES[m].icon && (
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
