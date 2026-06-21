@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 from flow_extractor import process_video_to_features
 from world_model import CrowdWorldModel
+from metrics_logger import MetricsLogger
 
 
 # ─── DEVICE ───────────────────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ DEVICE = get_device()
 
 # Scale epochs/batch to available hardware.
 # NOTE: HIDDEN_DIM/N_LAYERS are pinned to the CrowdWorldModel defaults (256/2)
-# because backend/main.py and app.py load checkpoints with those defaults — a
+# because backend/main.py loads checkpoints with those defaults — a
 # larger architecture here would save a state_dict that fails to load there.
 HIDDEN_DIM, N_LAYERS = 256, 2
 if DEVICE.type == "cuda":
@@ -100,6 +101,9 @@ def train_world_model(features_list, epochs=None, seq_len=None,
         optimizer, T_max=epochs, eta_min=1e-5)
 
     best_loss = float('inf')
+    log = MetricsLogger("world_model", config={
+        "epochs": epochs, "seq_len": seq_len, "batch_size": batch_size,
+        "hidden_dim": HIDDEN_DIM, "n_layers": N_LAYERS, "device": DEVICE.type})
     print("\n" + "="*50)
     print("WORLD MODEL TRAINING")
     print("="*50)
@@ -161,10 +165,14 @@ def train_world_model(features_list, epochs=None, seq_len=None,
             best_loss = avg
             torch.save(model.state_dict(), "models/world_model.pt")
 
+        log.log(epoch, loss=avg, best=best_loss,
+                lr=scheduler.get_last_lr()[0])
+
         if epoch % 5 == 0:
             print(f"  Epoch {epoch:3d}/{epochs} | "
                   f"Loss: {avg:.5f} | Best: {best_loss:.5f}")
 
+    log.close(plot_keys=["loss", "best", "lr"])
     print(f"\n✓ World model done. Best loss: {best_loss:.5f}")
     print("  Saved: models/world_model.pt")
     return model
@@ -180,9 +188,11 @@ if __name__ == "__main__":
     print("="*50)
     try:
         from dyna_trainer import DynaTrainer
+        rl_log = MetricsLogger("rl_policy", config={"episodes": 300})
         trainer = DynaTrainer(model)
-        trainer.run_dyna_training(n_episodes=300)
+        trainer.run_dyna_training(n_episodes=300, logger=rl_log)
         torch.save(trainer.q_net.state_dict(), "models/rl_policy.pt")
+        rl_log.close(plot_keys=["avg_reward_50", "reward", "loss", "epsilon"])
         print("✓ RL policy saved: models/rl_policy.pt")
     except (ImportError, AttributeError) as e:
         print(f"  Dyna RL not ready yet ({e}) — skipping. Run after Phase 3.")

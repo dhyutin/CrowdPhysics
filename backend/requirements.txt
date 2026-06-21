@@ -9,3 +9,5 @@ torchvision
 opencv-python-headless
 numpy<2
 Pillow
+playwright
+requests

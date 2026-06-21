@@ -28,6 +28,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
+from metrics_logger import MetricsLogger
+
 
 # ─── DEVICE ───────────────────────────────────────────────────────────────────
 
@@ -204,6 +206,10 @@ def finetune_raft(video_dir="data/videos",
     )
 
     best_loss = float('inf')
+    log = MetricsLogger("raft_finetune", config={
+        "epochs": epochs, "batch_size": batch_size, "max_lr": lr,
+        "smooth_weight": smooth_weight, "weight_decay": weight_decay,
+        "device": DEVICE.type, "n_pairs": len(dataset)})
     print(f"\n{'='*50}")
     print("RAFT FINE-TUNING")
     print(f"  epochs={epochs}  batch_size={batch_size}  max_lr={lr}")
@@ -258,9 +264,13 @@ def finetune_raft(video_dir="data/videos",
             best_loss = avg
             torch.save(model.state_dict(), output_path)
 
+        log.log(epoch, loss=avg, best=best_loss, lr=cur_lr)
+
         print(f"  Epoch {epoch:3d}/{epochs} | "
               f"Loss: {avg:.5f} | Best: {best_loss:.5f} | lr: {cur_lr:.2e}",
               flush=True)
+
+    log.close(plot_keys=["loss", "best", "lr"])
 
     # Always keep a copy of the final-epoch weights alongside the best.
     final_path = output_path.replace(".pt", "_final.pt")

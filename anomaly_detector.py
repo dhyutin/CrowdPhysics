@@ -244,7 +244,7 @@ def load_detector(world_model_path="models/world_model.pt",
                   window_size=30, alert_threshold=2.5):
     """
     Load a fully trained detector from saved checkpoints.
-    Use this in app.py for the live demo.
+    Use this in the backend for the live demo.
     """
     from world_model import CrowdWorldModel
     from dyna_trainer import DynaTrainer

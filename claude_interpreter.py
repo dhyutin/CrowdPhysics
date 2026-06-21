@@ -491,7 +491,7 @@ def get_live_interpretation(physics_state, venue_config=None):
     Returns everything needed for the live UI panel in one call.
 
     Combines situational awareness + RL explanation into one dict.
-    Use this in app.py instead of calling roles separately.
+    Use this in the backend instead of calling roles separately.
 
     Args:
         physics_state: dict from anomaly_detector.process_frame()

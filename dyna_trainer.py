@@ -214,10 +214,14 @@ class DynaTrainer:
 
     # ── MAIN TRAINING LOOP ────────────────────────────────────────────────────
 
-    def run_dyna_training(self, n_episodes=500, steps_per_episode=10):
+    def run_dyna_training(self, n_episodes=500, steps_per_episode=10,
+                          logger=None):
         """
         Full Dyna training loop.
         Generate episodes in world model → train policy → repeat.
+
+        Args:
+            logger: optional MetricsLogger — logs per-episode reward/loss curves.
         """
         print(f"\nDyna-CQL Training: {n_episodes} episodes")
         print("=" * 40)
@@ -238,9 +242,18 @@ class DynaTrainer:
             self.epsilon = max(self.eps_min,
                                self.epsilon * self.eps_decay)
 
+            avg_r = float(np.mean(all_rewards[-50:])) if all_rewards else 0.0
+            avg_l = float(np.mean(all_losses[-100:])) if all_losses else 0.0
+
+            if logger is not None:
+                logger.log(ep,
+                           reward=ep_reward,
+                           avg_reward_50=avg_r,
+                           loss=avg_l,
+                           epsilon=self.epsilon,
+                           buffer=len(self.replay_buffer))
+
             if ep % 50 == 0:
-                avg_r = np.mean(all_rewards[-50:]) if all_rewards else 0
-                avg_l = np.mean(all_losses[-100:]) if all_losses else 0
                 print(f"  Ep {ep:4d} | "
                       f"Reward: {avg_r:6.2f} | "
                       f"Loss: {avg_l:.4f} | "

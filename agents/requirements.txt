@@ -1,2 +1,5 @@
 uagents
 requests
+playwright
+opencv-python-headless
+numpy<2

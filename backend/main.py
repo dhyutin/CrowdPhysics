@@ -52,7 +52,8 @@ from simulation_engine import VenueConfig, VenueElement, CrowdSimulator
 # ── LOAD MODELS ONCE AT STARTUP ───────────────────────────────────────────────
 
 print("[startup] Loading CrowdPhysics models...")
-_wm      = CrowdWorldModel()
+# Architecture must match the GPU-trained checkpoint (hidden=512, layers=3).
+_wm      = CrowdWorldModel(hidden_dim=512, n_layers=3)
 _trainer = DynaTrainer(_wm)
 
 _wm_path = ROOT / "models" / "world_model.pt"
@@ -111,6 +112,91 @@ def _numpy_clean(obj: Any) -> Any:
     return obj
 
 
+def _analyze_frames(frames: list[np.ndarray], fps: float,
+                    venue: str) -> dict:
+    """
+    Run the crowd-physics pipeline over a list of consecutive BGR frames.
+
+    Shared by /api/analyze (frames decoded from an uploaded video) and
+    /api/monitor_url (frames captured live from a web page via Browserbase).
+
+    Returns the response dict used by the Monitor tab.
+    """
+    _detector.buf.clear()
+
+    timeline: list = []
+    peak_frame = None
+    peak_score = -999.0
+    peak_physics = None
+    last_claude = "Calibrating..."
+    last_rl = ""
+    did_claude = False
+
+    prev_frame = frames[0]
+    for step, curr in enumerate(frames[1:]):
+        sm_curr = cv2.resize(curr, (320, 240))
+        sm_prev = cv2.resize(prev_frame, (320, 240))
+
+        flow = extract_farneback_flow(sm_prev, sm_curr)
+        features = flow_to_features(flow)
+        physics = _detector.process_frame(features)
+
+        disp_flow = extract_farneback_flow(
+            cv2.resize(prev_frame, (640, 480)),
+            cv2.resize(curr, (640, 480)),
+        )
+        canvas, _ = render_pressure_field(disp_flow, physics,
+                                          frame_shape=(480, 640))
+
+        timeline.append({
+            "time":        round(step / fps, 1),
+            "status":      physics["status"],
+            "score":       physics["score"],
+            "probability": round(physics["probability"] * 100, 1),
+        })
+
+        if physics["score"] > peak_score:
+            peak_score = physics["score"]
+            peak_frame = canvas.copy()
+            peak_physics = {k: v for k, v in physics.items()
+                            if k != "z_latent"}
+
+        if physics["status"] != "CALIBRATING" and (not did_claude or step % 60 == 0):
+            try:
+                last_claude = interpret_live(physics, venue=venue)
+                did_claude = True
+                if physics.get("intervention"):
+                    last_rl = explain_rl_decision(
+                        physics["intervention"], physics)
+            except Exception as exc:
+                last_claude = f"Claude error: {exc}"
+
+        prev_frame = curr
+
+    danger_n = sum(1 for p in timeline if p["status"] == "DANGER")
+    total = len(timeline)
+    first_danger = next(
+        (p["time"] for p in timeline if p["status"] == "DANGER"), None)
+
+    if first_danger is not None:
+        summary = (f"DANGER at T+{first_danger}s | "
+                   f"Peak: {peak_score:.2f} | "
+                   f"Dangerous: {danger_n}/{total} frames")
+    else:
+        summary = (f"No crush risk | "
+                   f"Peak: {peak_score:.2f} | "
+                   f"Analyzed {total} frames")
+
+    return {
+        "peak_frame_b64": _frame_to_b64(peak_frame) if peak_frame is not None else None,
+        "summary":         summary,
+        "claude_briefing": last_claude,
+        "rl_explanation":  last_rl,
+        "timeline":        timeline[-60:],
+        "peak_physics":    peak_physics,
+    }
+
+
 # ── GET /api/health ───────────────────────────────────────────────────────────
 
 @app.get("/api/health")
@@ -149,96 +235,75 @@ async def analyze(
     try:
         cap = cv2.VideoCapture(tmp_path)
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        _detector.buf.clear()
 
-        timeline:    list = []
-        peak_frame   = None
-        peak_score   = -999.0
-        peak_physics = None
-        last_claude  = "Calibrating..."
-        last_rl      = ""
-        prev_frame   = None
-
-        ret, prev_frame = cap.read()
-        if not ret:
-            raise HTTPException(status_code=400, detail="Cannot read video")
-
-        frame_idx = 0
-        while frame_idx < 500:
-            ret, curr = cap.read()
+        frames: list = []
+        while len(frames) < 500:
+            ret, frame = cap.read()
             if not ret:
                 break
-
-            sm_curr = cv2.resize(curr, (320, 240))
-            sm_prev = cv2.resize(prev_frame, (320, 240))
-
-            flow     = extract_farneback_flow(sm_prev, sm_curr)
-            features = flow_to_features(flow)
-            physics  = _detector.process_frame(features)
-
-            # Render display frame
-            disp_flow  = extract_farneback_flow(
-                cv2.resize(prev_frame, (640, 480)),
-                cv2.resize(curr,       (640, 480)),
-            )
-            canvas, _ = render_pressure_field(disp_flow, physics,
-                                               frame_shape=(480, 640))
-
-            timeline.append({
-                "time":        round(frame_idx / fps, 1),
-                "status":      physics["status"],
-                "score":       physics["score"],
-                "probability": round(physics["probability"] * 100, 1),
-            })
-
-            if physics["score"] > peak_score:
-                peak_score   = physics["score"]
-                peak_frame   = canvas.copy()
-                peak_physics = {k: v for k, v in physics.items()
-                                if k != "z_latent"}
-
-            # Claude every 60 frames on elevated status
-            if frame_idx % 60 == 0 and physics["status"] != "CALIBRATING":
-                try:
-                    last_claude = interpret_live(physics, venue=venue)
-                    if physics.get("intervention"):
-                        last_rl = explain_rl_decision(
-                            physics["intervention"], physics)
-                except Exception as exc:
-                    last_claude = f"Claude error: {exc}"
-
-            prev_frame = curr
-            frame_idx += 1
-
+            frames.append(frame)
         cap.release()
+
+        if len(frames) < 2:
+            raise HTTPException(status_code=400, detail="Cannot read video")
+
+        result = _analyze_frames(frames, fps=fps, venue=venue)
 
     finally:
         os.unlink(tmp_path)
 
-    danger_n = sum(1 for p in timeline if p["status"] == "DANGER")
-    warn_n   = sum(1 for p in timeline if p["status"] == "WARNING")
-    total    = len(timeline)
+    return JSONResponse(_numpy_clean(result))
 
-    first_danger = next(
-        (p["time"] for p in timeline if p["status"] == "DANGER"), None)
 
-    if first_danger is not None:
-        summary = (f"DANGER at T+{first_danger}s | "
-                   f"Peak: {peak_score:.2f} | "
-                   f"Dangerous: {danger_n}/{total} frames")
-    else:
-        summary = (f"No crush risk | "
-                   f"Peak: {peak_score:.2f} | "
-                   f"Analyzed {total} frames")
+# ── POST /api/monitor_url ─────────────────────────────────────────────────────
 
-    return JSONResponse(_numpy_clean({
-        "peak_frame_b64": _frame_to_b64(peak_frame) if peak_frame is not None else None,
-        "summary":         summary,
-        "claude_briefing": last_claude,
-        "rl_explanation":  last_rl,
-        "timeline":        timeline[-60:],
-        "peak_physics":    peak_physics,
-    }))
+class MonitorURLRequest(BaseModel):
+    url: str
+    venue:    str = "Live Camera"
+    n_frames: int = 45
+
+
+@app.post("/api/monitor_url")
+def monitor_url(req: MonitorURLRequest):
+    """
+    Monitor a live web camera / livestream page via Browserbase.
+
+    Spins up a Browserbase cloud browser, navigates to the page, captures
+    rendered frames, and runs them through the same crowd-physics pipeline
+    as /api/analyze. Returns the Monitor-tab result plus a `source` block.
+    """
+    if not os.environ.get("BROWSERBASE_API_KEY") or \
+            not os.environ.get("BROWSERBASE_PROJECT_ID"):
+        raise HTTPException(
+            status_code=400,
+            detail="BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
+
+    try:
+        from agents.browserbase_monitor import capture_frames
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Browserbase capture unavailable: {exc}")
+
+    n_frames = max(2, min(req.n_frames, 120))
+    try:
+        frames, fps = capture_frames(req.url, n_frames=n_frames)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Browserbase capture failed: {exc}")
+
+    if len(frames) < 2:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Captured only {len(frames)} frame(s) from {req.url}")
+
+    result = _analyze_frames(frames, fps=fps, venue=req.venue)
+    result["source"] = {
+        "url":             req.url,
+        "frames_captured": len(frames),
+        "capture_fps":     round(fps, 2),
+    }
+    return JSONResponse(_numpy_clean(result))
 
 
 # ── POST /api/simulate ────────────────────────────────────────────────────────
