@@ -16,7 +16,7 @@ CrowdPhysics is a two-mode platform for crowd safety.
 
 **Simulate mode** is the pre-event planning tool. Upload a photo or video of a venue, and agents reconstruct the space in 3D, simulate a crowd flowing through it, and surface the danger zones — peak-pressure sectors, bottlenecks, Fruin level-of-service, and time-to-crush — before a single person arrives. It then suggests how to arrange entrances, flow, and staff to make the layout safe.
 
-A capability I am especially excited about lives in Plan mode: **expected entry/exit flow**. We render the simulation as a synthetic-crowd video and push it through the *exact same RAFT optical-flow pipeline* used on live cameras — so before the event, an operator can preview the flow each door *should* show, and validate door placement against the perception system itself.
+A capability I am especially excited about lives in Simulate mode: **expected entry/exit flow**. We render the simulation as a synthetic-crowd video and push it through the *exact same RAFT optical-flow pipeline* used on live cameras — so before the event, an operator can preview the flow each door *should* show, and validate door placement against the perception system itself.
 
 
 ## Architecture
@@ -31,7 +31,7 @@ At the end of that pipeline sits a **multi-agent decision framework**: no single
 
 ![CrowdPhysics Monitor multi-agent decision framework — anomaly status, world-model futures, statistical trend, RL agent, and counterfactual fused with Claude into a unified verdict, briefing, action, and alerts](monitor_decision_framework.png)
 
-**Plan pipeline — photo to safe layout.** Upload a photo or video; Claude vision reconstructs the venue in 3D, the crowd simulator fills it, and we surface danger zones, Fruin level-of-service, and an arrangement plan before anyone arrives.
+**Simulate pipeline — photo to safe layout.** Upload a photo or video; Claude vision reconstructs the venue in 3D, the crowd simulator fills it, and we surface danger zones, Fruin level-of-service, and an arrangement plan before anyone arrives.
 
 ![CrowdPhysics Simulation pipeline — photo → 3D venue reconstruction → crowd simulation → danger zones and safety plan](simulation_pipeline_architecture.png)
 
@@ -44,7 +44,7 @@ At the end of that pipeline sits a **multi-agent decision framework**: no single
 | Layer | What we used |
 | --- | --- |
 | **Perception** | RAFT (`torchvision raft_small`, self-supervised fine-tuned `raft_crowd.pt`) with a Farneback fallback; flow compressed to 256-d features on an 8×8 grid |
-| **World model** | RSSM-style latent dynamics — a stochastic encoder to a 64-d `z` and a transition model trained self-supervised on calm footage only |
+| **World model** | Latent dynamics — a CNN/MLP encoder to a 64-d `z` plus a stochastic LSTM transition (μ, log-var), trained self-supervised on calm footage only. We also built a Dreamer/RSSM-style variant (v2); a latent-probe comparison kept the simpler v1 baseline in production |
 | **Anomaly** | Prediction "surprise" σ measured against a calibrated per-stream baseline |
 | **Intervention RL** | Dyna/Dreamer-style model-based RL with Conservative Q-Learning (CQL), trained entirely in the world model's imagination |
 | **Simulator** | Pressure-grid CFD crowd model with time-varying arrival curves, density-dependent speed (fundamental diagram), and the Fruin Level-of-Service metric |
@@ -56,7 +56,7 @@ At the end of that pipeline sits a **multi-agent decision framework**: no single
 ## Challenges we ran into
 
 - **Anomaly detection with no disaster data.** Real crowd-crush footage is scarce and ethically fraught, so we could not train a supervised classifier. We had to invert the problem: train only on normal physics and treat the world model's prediction error as the danger signal.
-- **Putting the stochasticity in the right place.** Our first world model was a "half-VAE" — the encoder was deterministic but the KL term acted on the transition, so the latent space was never shaped toward a prior and our `||z||` danger score was meaningless. Rebuilding it as a proper posterior-vs-prior RSSM was the fix that made the anomaly signal principled.
+- **Putting the stochasticity in the right place.** Our world model is a "half-VAE" — the encoder is deterministic and the stochasticity lives in the LSTM transition (μ, log-var). To check whether a proper posterior-vs-prior RSSM would give a more principled `||z||` danger score, we built one (v2) — but a latent-probe comparison showed the simpler v1 still generalized better, so we kept it. Diagnosing *where* the stochasticity belongs, then letting the probe decide, was the real lesson.
 - **Proving the model actually learned physics.** It's easy to claim a self-supervised model "understands" a crowd. We had to prove it by linearly probing the latent space.
 - **Connecting simulation to perception.** The simulator outputs fields, not people, so optical flow had nothing to track. Building the particle-advection renderer — auto-scaling velocity to visible pixel motion and measuring magnitude-weighted flow at each door — was what finally let the same RAFT pipeline validate a layout before the event.
 - **Real-time end to end.** Chaining RAFT → world model → anomaly scoring → RL → Claude while keeping the feed responsive took a lot of profiling and a lazy-loaded, calibration-aware inference layer, plus running Claude's risk assessment on a non-blocking background thread.
@@ -67,13 +67,13 @@ The result we're proudest of is that the world model genuinely **discovered crow
 
 | Concept                | R²   | Status                                    |
 | ---------------------- | ---- | ----------------------------------------- |
-| Crowd Velocity         | 0.92 | Discovered                                |
-| Turbulence             | 0.90 | Discovered                                |
-| Backward Pressure      | 0.92 | Discovered                                |
-| Boundary Stress        | 0.99 | Discovered                                |
-| **Unknown dimensions** | —    | **0.91σ pre-anomaly vs. calm separation** |
+| Crowd Velocity         | 0.83 | Discovered                                |
+| Turbulence             | 0.78 | Discovered                                |
+| Backward Pressure      | 0.84 | Discovered                                |
+| Boundary Stress        | 0.94 | Discovered                                |
+| **Unknown dimensions** | —    | **1.56σ pre-anomaly vs. calm separation** |
 
-Boundary stress — compression at walls and barriers, the literal mechanism of a crush — was recovered at R² = 0.99, even though we never told the model what a wall is. And the latent dimensions we *couldn't* explain still separated pre-anomaly frames from calm ones by 0.91σ, meaning the model encodes early-warning signal we don't yet have names for.
+Boundary stress — compression at walls and barriers, the literal mechanism of a crush — was recovered at R² = 0.94, even though we never told the model what a wall is. And the latent dimensions we *couldn't* explain still separated pre-anomaly frames from calm ones by 1.56σ, meaning the model encodes early-warning signal we don't yet have names for.
 
 We're also proud that:
 
@@ -83,7 +83,7 @@ We're also proud that:
 
 ## Other experiments
 
-- **World model v1 → v2.** We started with a deterministic CNN-encoder + LSTM transition and migrated to a stochastic RSSM after the latent probe showed the danger score wasn't grounded.
+- **World model v1 vs. RSSM v2.** We built a Dreamer/RSSM-style stochastic-encoder variant (v2), but a linear-probe comparison showed it didn't beat the simpler v1 (CNN/MLP encoder + LSTM transition) on physics fidelity or surprise separation — so v1 stayed in production.
 - **Self-supervised RAFT fine-tuning.** We fine-tuned RAFT on unlabeled crowd video to sharpen flow on dense, low-contrast scenes (`raft_crowd.pt`).
 - **"Prove the fix works" counterfactuals.** Using the RL effect model, we roll the crowd forward two ways — do nothing vs. apply the recommended intervention — so the projected impact of acting *now* is visible as the gap between two risk curves.
 - **Minutes-ahead forecasting.** Beyond the immediate surprise signal, we extrapolate the risk trend to project crush risk minutes into the future.
@@ -91,7 +91,7 @@ We're also proud that:
 ## What we learned
 
 - Self-supervised "surprise" is a remarkably powerful safety signal — you can detect danger you never trained on, as long as you've learned what "normal" looks like.
-- Where you put stochasticity in a latent model matters enormously; the RSSM formulation wasn't just cleaner, it was the difference between a meaningful danger score and noise.
+- Where you put stochasticity in a latent model matters enormously — but cleaner isn't always better: our RSSM variant was more principled on paper, yet a latent probe showed the simpler baseline generalized better, so we trusted the measurement over the aesthetics.
 - Linear probing is an underrated way to *verify* that a model learned something real, and it turned a black box into our most compelling demo.
 - Model-based RL (Dyna / Dreamer-style) lets you train a useful intervention policy entirely in imagination — no real catastrophes required.
 - Validating a simulator through the *same* perception model you deploy is a powerful sanity check — it catches layouts that look fine on a heatmap but read as a bottleneck to the optical-flow pipeline.
@@ -100,6 +100,6 @@ We're also proud that:
 
 - **Multi-camera fusion** — stitch several feeds into one venue-wide pressure field for full situational coverage.
 - **Calibrated, deployable alerts** — push warnings to staff radios, SMS, and agent networks with venue-specific instructions.
-- **Richer venue reconstruction** — go from a single photo to a true 3D layout for higher-fidelity Plan-mode simulations.
+- **Richer venue reconstruction** — go from a single photo to a true 3D layout for higher-fidelity Simulate-mode simulations.
 - **Edge deployment** — run the pipeline on-site for privacy and zero-latency monitoring at large events.
 - **Naming the unknown** — investigate the unexplained latent dimensions that already predict danger, and turn them into new, named safety metrics.

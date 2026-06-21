@@ -276,7 +276,7 @@ for i, (num, t, d, c) in enumerate(stages):
              align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
 text(s, 0.85, 6.05, 11.6, 0.6,
      [[("Tools: ", {"size": 13, "bold": True, "color": LAV}),
-       ("PyTorch \u00b7 RAFT (torchvision) \u00b7 RSSM world model \u00b7 Dyna + CQL RL \u00b7 Claude (Sonnet)",
+       ("PyTorch \u00b7 RAFT (torchvision) \u00b7 LSTM world model \u00b7 Dyna + CQL RL \u00b7 Claude (Sonnet)",
         {"size": 13, "color": MUTE})]])
 footer(s, 4)
 
@@ -291,10 +291,10 @@ text(s, 0.85, 1.95, 11.6, 0.6,
      [[("We linearly probed the unlabeled latent space and recovered interpretable physics:",
         {"size": 15.5, "color": MUTE})]])
 probes = [
-    ("Crowd velocity", 0.92, TEAL),
-    ("Turbulence", 0.90, TEAL),
-    ("Backward pressure", 0.92, AMBER),
-    ("Boundary stress  (the literal mechanism of a crush)", 0.99, EMER),
+    ("Crowd velocity", 0.83, TEAL),
+    ("Turbulence", 0.78, TEAL),
+    ("Backward pressure", 0.84, AMBER),
+    ("Boundary stress  (the literal mechanism of a crush)", 0.94, EMER),
 ]
 by = 2.75
 bar_x, bar_w = 5.2, 5.7
@@ -315,7 +315,7 @@ text(s, 1.15, 5.85, 11.0, 0.95,
      [[("Even the latent dimensions we ", {"size": 14, "color": WHITE}),
        ("couldn't", {"size": 14, "italic": True, "color": WHITE}),
        ("  name still separate pre-anomaly frames from calm ones by ", {"size": 14, "color": WHITE}),
-       ("0.91\u03c3", {"size": 14, "bold": True, "color": LAV}),
+       ("1.56\u03c3", {"size": 14, "bold": True, "color": LAV}),
        (" — early-warning signal we don't yet have words for.", {"size": 14, "color": WHITE})]],
      anchor=MSO_ANCHOR.MIDDLE)
 footer(s, 5)
@@ -351,7 +351,7 @@ footer(s, 7)
 # 8 · PLAN MODE
 # ════════════════════════════════════════════════════════════════════════════
 s = slide()
-kicker(s, "Plan mode \u00b7 pre-event", TEAL)
+kicker(s, "Simulate mode \u00b7 pre-event", TEAL)
 title(s, "Simulate the crowd before anyone arrives")
 text(s, 0.85, 1.95, 11.6, 0.6,
      [[("Upload a photo or video — agents rebuild the venue in 3D, fill it with a simulated crowd, and surface danger zones, Fruin level-of-service and a safe arrangement plan.",
@@ -364,7 +364,7 @@ footer(s, 8)
 # 9 · SIM → RAFT BRIDGE
 # ════════════════════════════════════════════════════════════════════════════
 s = slide()
-kicker(s, "Plan mode \u00b7 closing the loop", BLUE)
+kicker(s, "Simulate mode \u00b7 closing the loop", BLUE)
 title(s, "Validate a layout through the same eyes that will watch it")
 text(s, 0.85, 1.95, 11.6, 0.9,
      [[("We render the simulation as a synthetic-crowd video and run it through the ", {"size": 15, "color": MUTE}),
@@ -383,7 +383,7 @@ kicker(s, "Built with", LAV)
 title(s, "The stack")
 cards = [
     ("Perception", "PyTorch \u00b7 RAFT (torchvision, fine-tuned)", TEAL),
-    ("World model", "RSSM latent dynamics \u00b7 256 \u2192 64-d", LAV),
+    ("World model", "LSTM latent dynamics \u00b7 256 \u2192 64-d", LAV),
     ("Decision (RL)", "Dyna + Conservative Q-Learning", BLUE),
     ("Agent / LLM", "Claude (Sonnet) \u00b7 Anthropic", EMER),
     ("Live capture", "Browserbase \u00b7 yt-dlp", AMBER),

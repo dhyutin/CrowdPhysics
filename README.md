@@ -16,11 +16,11 @@ CrowdPhysics is one platform with two modes:
 
 - **Monitor mode (live).** Turns any CCTV stream, phone, or public webcam into a crush-risk early-warning system. It extracts optical flow, feeds it to a self-supervised world model, and forecasts what the crowd will do next. When the model becomes *surprised* — the crowd behaves in a way it never saw during calm footage — it raises a warning. Claude then explains what's happening, decides a calibrated crush-risk %, and recommends an action.
 
-- **Plan mode (pre-event).** Upload a photo or video of a venue; agents reconstruct it in 3D, fill it with a simulated crowd, and surface danger zones, Fruin level-of-service, and a safe arrangement plan. The **Sim → RAFT bridge** then renders the simulation as a synthetic-crowd video and runs it through the *same* optical-flow extractor used live — previewing the inflow/outflow each entrance and exit should show on the day.
+- **Simulate mode (pre-event).** Upload a photo or video of a venue; agents reconstruct it in 3D, fill it with a simulated crowd, and surface danger zones, Fruin level-of-service, and a safe arrangement plan. The **Sim → RAFT bridge** then renders the simulation as a synthetic-crowd video and runs it through the *same* optical-flow extractor used live — previewing the inflow/outflow each entrance and exit should show on the day.
 
 The signature of the product is the visualization: instead of a red dot on a surveillance feed, the crowd is rendered as a CFD-style pressure field. The people disappear, and only the physics remains.
 
-> It learned crowd physics on its own — a linear probe of the unlabeled latent space recovers crowd velocity (R² 0.92), turbulence (0.90), backward pressure (0.92), and **boundary stress — the literal mechanism of a crush — at R² 0.99**, without ever being told what a wall is.
+> It learned crowd physics on its own — a linear probe of the unlabeled latent space recovers crowd velocity (R² 0.83), turbulence (0.78), backward pressure (0.84), and **boundary stress — the literal mechanism of a crush — at R² 0.94**, without ever being told what a wall is.
 
 ---
 
@@ -38,7 +38,7 @@ At the end of the pipeline, a **multi-agent decision framework** fuses every sig
 
 ![Multi-agent decision framework](devpost/monitor_decision_framework.png)
 
-### Plan pipeline — photo to safe layout
+### Simulate pipeline — photo to safe layout
 
 ![Simulation pipeline](devpost/simulation_pipeline_architecture.png)
 
@@ -53,7 +53,7 @@ At the end of the pipeline, a **multi-agent decision framework** fuses every sig
 | Layer | Stack |
 | --- | --- |
 | **Perception** | PyTorch · RAFT (`torchvision`, optionally fine-tuned `raft_crowd.pt`) with a Farneback fallback |
-| **World model** | RSSM-style latent dynamics — stochastic encoder, 256 → 64-d latent |
+| **World model** | Latent dynamics — CNN/MLP encoder + stochastic LSTM transition, 256 → 64-d latent (RSSM v2 explored, v1 shipped) |
 | **Decision (RL)** | Dyna-style model-based RL with Conservative Q-Learning (CQL), trained in imagination |
 | **Agent / LLM** | Claude (Sonnet) via Anthropic — vision reconstruction, behavior planning, safety reports, agent-decided live risk |
 | **Live capture** | Browserbase (cloud headless browser) · yt-dlp · OpenCV |
@@ -135,7 +135,7 @@ SLACK_WEBHOOK_URL=...
 backend/            FastAPI app (main.py), API endpoints, streaming
 frontend/           Next.js + Three.js UI
 flow_extractor.py   RAFT / Farneback optical flow + pressure-field render
-world_model.py      RSSM-style world model (encoder + transition)
+world_model.py      World model v1 — CNN/MLP encoder + LSTM transition
 anomaly_detector.py surprise σ scoring + status
 dyna_trainer.py     model-based RL (Dyna + CQL)
 simulation_engine.py  pressure-grid crowd simulator + Sim→RAFT frames
