@@ -275,6 +275,79 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
         return {"error": str(exc)}
 
 
+def _calibrate(frames: list[np.ndarray]) -> int:
+    """
+    Establish the anomaly baseline on the opening (assumed calm) frames so the
+    σ-above-baseline score is real, not the uncalibrated error*50 fallback.
+    Returns the number of calibration frames used.
+    """
+    _detector.buf.clear()
+    cal_feats = []
+    for i in range(1, min(len(frames), 61)):
+        f = extract_flow(cv2.resize(frames[i - 1], (320, 240)),
+                         cv2.resize(frames[i], (320, 240)))
+        cal_feats.append(flow_to_features(f))
+    if cal_feats:
+        _detector.calibrated = False
+        _detector.calibrate([np.array(cal_feats)])
+    _detector.buf.clear()
+    return len(cal_feats)
+
+
+def _summarize(timeline: list, peak_score: float) -> str:
+    """One-line verdict shared by the batch and streaming pipelines."""
+    danger_n = sum(1 for p in timeline if p["status"] == "DANGER")
+    total = len(timeline)
+    first = next((p["time"] for p in timeline if p["status"] == "DANGER"), None)
+    if first is not None:
+        return (f"DANGER at T+{first}s | Peak: {peak_score:.2f} | "
+                f"Dangerous: {danger_n}/{total} frames")
+    return f"No crush risk | Peak: {peak_score:.2f} | Analyzed {total} frames"
+
+
+def _build_trace(cal_n: int, timeline: list, peak_score: float, forecast,
+                 claude: str, did_claude: bool, rl: str, peak_physics) -> list:
+    """Assemble the agent-trace shown in the Monitor tab."""
+    total = len(timeline)
+    danger_n = sum(1 for p in timeline if p["status"] == "DANGER")
+    trace = [
+        {"agent": "Calibration Agent", "icon": "calibrate",
+         "action": "Established calm baseline",
+         "detail": f"{cal_n} opening frames used as normal reference",
+         "status": "ok"},
+        {"agent": "World Model", "icon": "brain",
+         "action": "Encoded crowd into latent physics",
+         "detail": f"{total} frames → 64-D self-supervised state space",
+         "status": "ok"},
+        {"agent": "Anomaly Detector", "icon": "pulse",
+         "action": "Scored crush risk per frame",
+         "detail": f"peak {peak_score:.2f}σ · {danger_n}/{total} frames flagged danger",
+         "status": "danger" if danger_n else "ok"},
+    ]
+    if forecast and not forecast.get("error"):
+        lead = forecast.get("lead_time_s")
+        trace.append({
+            "agent": "Forecast Engine", "icon": "forecast",
+            "action": "Projected the crowd's near future",
+            "detail": (f"{forecast['horizon_s']}s horizon · "
+                       + (f"danger in ~{lead}s" if lead else "no crush projected")),
+            "status": "danger" if lead else "ok"})
+    if did_claude:
+        first_line = claude.split("\n", 1)[0] if isinstance(claude, str) else ""
+        trace.append({
+            "agent": "Claude · Situational Awareness", "icon": "claude",
+            "action": "Briefed the operator", "detail": first_line[:120],
+            "status": "ok"})
+    if rl:
+        iv = (peak_physics or {}).get("intervention") or {}
+        trace.append({
+            "agent": "RL Policy", "icon": "shield",
+            "action": "Recommended an intervention",
+            "detail": iv.get("action_name", "intervention selected"),
+            "status": "ok"})
+    return trace
+
+
 def _analyze_frames(frames: list[np.ndarray], fps: float,
                     venue: str) -> dict:
     """
@@ -285,20 +358,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
 
     Returns the response dict used by the Monitor tab.
     """
-    _detector.buf.clear()
-
-    # ── CALIBRATION ──────────────────────────────────────────────────────────
-    # Establish the anomaly baseline on the opening frames (assumed calm) so the
-    # σ-above-baseline score is real instead of the uncalibrated error*50 fallback.
-    cal_feats = []
-    for i in range(1, min(len(frames), 61)):
-        f = extract_flow(cv2.resize(frames[i - 1], (320, 240)),
-                         cv2.resize(frames[i], (320, 240)))
-        cal_feats.append(flow_to_features(f))
-    if cal_feats:
-        _detector.calibrated = False
-        _detector.calibrate([np.array(cal_feats)])
-    _detector.buf.clear()
+    cal_n = _calibrate(frames)
 
     timeline: list = []
     feat_history: list = []   # decoded flow features per frame (for forecasting)
@@ -368,64 +428,14 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
     # ~12 fps loop regardless of source fps so short/long clips animate nicely.
     flow_gif_b64 = _frames_to_gif_b64(field_frames, fps=12.0)
 
-    danger_n = sum(1 for p in timeline if p["status"] == "DANGER")
-    total = len(timeline)
-    first_danger = next(
-        (p["time"] for p in timeline if p["status"] == "DANGER"), None)
-
-    if first_danger is not None:
-        summary = (f"DANGER at T+{first_danger}s | "
-                   f"Peak: {peak_score:.2f} | "
-                   f"Dangerous: {danger_n}/{total} frames")
-    else:
-        summary = (f"No crush risk | "
-                   f"Peak: {peak_score:.2f} | "
-                   f"Analyzed {total} frames")
+    summary = _summarize(timeline, peak_score)
 
     # ── FORECAST: imagine the next frames in latent space ────────────────────
     cur_prob = (peak_physics.get("probability", 0.0) if peak_physics else 0.0)
     forecast = _forecast_future(feat_history, cur_prob, fps)
 
-    # ── AGENT TRACE: the sequence of agents that produced this result ─────────
-    trace = [
-        {"agent": "Calibration Agent", "icon": "calibrate",
-         "action": "Established calm baseline",
-         "detail": f"{len(cal_feats)} opening frames used as normal reference",
-         "status": "ok"},
-        {"agent": "World Model", "icon": "brain",
-         "action": "Encoded crowd into latent physics",
-         "detail": f"{total} frames → 64-D self-supervised state space",
-         "status": "ok"},
-        {"agent": "Anomaly Detector", "icon": "pulse",
-         "action": "Scored crush risk per frame",
-         "detail": (f"peak {peak_score:.2f}σ · "
-                    f"{danger_n}/{total} frames flagged danger"),
-         "status": "danger" if danger_n else "ok"},
-    ]
-    if forecast and not forecast.get("error"):
-        lead = forecast.get("lead_time_s")
-        trace.append({
-            "agent": "Forecast Engine", "icon": "forecast",
-            "action": "Projected the crowd's near future",
-            "detail": (f"{forecast['horizon_s']}s horizon · "
-                       + (f"danger in ~{lead}s" if lead
-                          else "no crush projected")),
-            "status": "danger" if lead else "ok"})
-    if did_claude:
-        first_line = (last_claude.split("\n", 1)[0]
-                      if isinstance(last_claude, str) else "")
-        trace.append({
-            "agent": "Claude · Situational Awareness", "icon": "claude",
-            "action": "Briefed the operator",
-            "detail": first_line[:120],
-            "status": "ok"})
-    if last_rl:
-        iv = (peak_physics or {}).get("intervention") or {}
-        trace.append({
-            "agent": "RL Policy", "icon": "shield",
-            "action": "Recommended an intervention",
-            "detail": iv.get("action_name", "intervention selected"),
-            "status": "ok"})
+    trace = _build_trace(cal_n, timeline, peak_score, forecast,
+                         last_claude, did_claude, last_rl, peak_physics)
 
     return {
         "peak_frame_b64": _frame_to_b64(peak_frame) if peak_frame is not None else None,
@@ -478,21 +488,10 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
         span_cm.__enter__()
 
     try:
-        _detector.buf.clear()
-
-        # ── CALIBRATION on the opening (assumed calm) frames ──────────────────
-        cal_feats = []
-        for i in range(1, min(len(frames), 61)):
-            f = extract_flow(cv2.resize(frames[i - 1], (320, 240)),
-                             cv2.resize(frames[i], (320, 240)))
-            cal_feats.append(flow_to_features(f))
-        if cal_feats:
-            _detector.calibrated = False
-            _detector.calibrate([np.array(cal_feats)])
-        _detector.buf.clear()
+        cal_n = _calibrate(frames)
         yield _ndjson({"type": "calibrating", "venue": venue,
                        "fps": round(float(fps), 2),
-                       "calibration_frames": len(cal_feats),
+                       "calibration_frames": cal_n,
                        "total_frames": len(frames)})
 
         timeline: list = []
@@ -567,18 +566,7 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
             peak_frame, _ = render_pressure_field(
                 peak_flow, peak_physics, frame_shape=(480, 640))
         flow_gif_b64 = _frames_to_gif_b64(field_frames, fps=12.0)
-
-        danger_n = sum(1 for p in timeline if p["status"] == "DANGER")
-        total = len(timeline)
-        first_danger = next(
-            (p["time"] for p in timeline if p["status"] == "DANGER"), None)
-        if first_danger is not None:
-            summary = (f"DANGER at T+{first_danger}s | "
-                       f"Peak: {peak_score:.2f} | "
-                       f"Dangerous: {danger_n}/{total} frames")
-        else:
-            summary = (f"No crush risk | Peak: {peak_score:.2f} | "
-                       f"Analyzed {total} frames")
+        summary = _summarize(timeline, peak_score)
 
         # Claude + RL once at the end (keeps the live pacing snappy).
         last_claude, last_rl, did_claude = "Calibrating...", "", False
@@ -603,50 +591,16 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
         except Exception:
             pass
 
-        trace = [
-            {"agent": "Calibration Agent", "icon": "calibrate",
-             "action": "Established calm baseline",
-             "detail": f"{len(cal_feats)} opening frames used as normal reference",
-             "status": "ok"},
-            {"agent": "World Model", "icon": "brain",
-             "action": "Encoded crowd into latent physics",
-             "detail": f"{total} frames → 64-D self-supervised state space",
-             "status": "ok"},
-            {"agent": "Anomaly Detector", "icon": "pulse",
-             "action": "Scored crush risk per frame (live)",
-             "detail": (f"peak {peak_score:.2f}σ · "
-                        f"{danger_n}/{total} frames flagged danger"),
-             "status": "danger" if danger_n else "ok"},
-        ]
-        if final_forecast and not final_forecast.get("error"):
-            lead = final_forecast.get("lead_time_s")
-            trace.append({
-                "agent": "Forecast Engine", "icon": "forecast",
-                "action": "Projected the crowd's near future",
-                "detail": (f"{final_forecast['horizon_s']}s horizon · "
-                           + (f"danger in ~{lead}s" if lead
-                              else "no crush projected")),
-                "status": "danger" if lead else "ok"})
-        if did_claude:
-            first_line = (last_claude.split("\n", 1)[0]
-                          if isinstance(last_claude, str) else "")
-            trace.append({
-                "agent": "Claude · Situational Awareness", "icon": "claude",
-                "action": "Briefed the operator",
-                "detail": first_line[:120], "status": "ok"})
-        if last_rl:
-            iv = (peak_physics or {}).get("intervention") or {}
-            trace.append({
-                "agent": "RL Policy", "icon": "shield",
-                "action": "Recommended an intervention",
-                "detail": iv.get("action_name", "intervention selected"),
-                "status": "ok"})
+        trace = _build_trace(cal_n, timeline, peak_score, final_forecast,
+                             last_claude, did_claude, last_rl, peak_physics)
 
         if span_cm is not None:
             try:
                 span = _otel_trace.get_current_span()
-                span.set_attribute("crowdphysics.total_frames", total)
-                span.set_attribute("crowdphysics.danger_frames", danger_n)
+                span.set_attribute("crowdphysics.total_frames", len(timeline))
+                span.set_attribute(
+                    "crowdphysics.danger_frames",
+                    sum(1 for p in timeline if p["status"] == "DANGER"))
                 span.set_attribute("crowdphysics.peak_score", float(peak_score))
             except Exception:
                 pass
