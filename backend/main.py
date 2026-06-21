@@ -145,6 +145,26 @@ def _frame_to_b64(frame_bgr: np.ndarray) -> str:
     return base64.b64encode(buf).decode()
 
 
+def _frame_to_jpeg_b64(frame_bgr: np.ndarray, width: int = 480,
+                       quality: int = 60) -> str | None:
+    """
+    Encode a BGR frame as a small base64 JPEG for live streaming.
+
+    Downscaled + JPEG so per-tick frames stay light. This is the exact image
+    the optical flow (and danger hotspot) was computed from, so the UI can
+    overlay the danger marker on it with guaranteed pixel alignment.
+    """
+    try:
+        h, w = frame_bgr.shape[:2]
+        if w > width:
+            frame_bgr = cv2.resize(frame_bgr, (width, int(h * width / w)))
+        ok, buf = cv2.imencode(".jpg", frame_bgr,
+                               [cv2.IMWRITE_JPEG_QUALITY, quality])
+        return base64.b64encode(buf).decode() if ok else None
+    except Exception:
+        return None
+
+
 def _frames_to_gif_b64(frames_rgb: list[np.ndarray], fps: float = 12.0) -> str | None:
     """
     Encode a list of RGB uint8 frames as a looping animated GIF (base64).
@@ -330,6 +350,62 @@ def _project_trend(timeline: list, horizon_s: float = TREND_HORIZON_S,
     }
 
 
+def _danger_hotspot(flow: np.ndarray, grid_size: int = 8,
+                    prev: dict | None = None, alpha: float = 0.45) -> dict:
+    """
+    Localize WHERE the danger is building from the optical-flow pressure grid.
+
+    Same pressure model as the rendered field (speed + turbulence + backward
+    flow), but instead of a heatmap we return the *region of danger* as a
+    normalized point + radius so the UI can mark the exact spot on the live
+    feed (not the whole frame). The region is the pressure-weighted centroid of
+    the high-pressure cells — robust to a single noisy cell — and is EMA-smoothed
+    against the previous frame so the marker glides instead of jumping.
+
+    Returns {x, y, r, intensity} all in [0, 1] (x,y = frame fraction).
+    """
+    H, W = flow.shape[:2]
+    ch, cw = max(1, H // grid_size), max(1, W // grid_size)
+    grid = np.zeros((grid_size, grid_size), dtype=np.float32)
+    for r in range(grid_size):
+        for c in range(grid_size):
+            cell = flow[r * ch:(r + 1) * ch, c * cw:(c + 1) * cw]
+            fx, fy = cell[:, :, 0], cell[:, :, 1]
+            mag = np.sqrt(fx * fx + fy * fy)
+            grid[r, c] = (float(mag.mean()) * 0.3
+                          + float(mag.var()) * 0.5
+                          + float(max(0.0, -fy.mean())) * 0.2)
+
+    pmax = float(grid.max())
+    intensity = float(min(1.0, pmax / 3.0))
+    thr = max(float(grid.mean() + grid.std()), pmax * 0.6)
+    ys, xs = np.where(grid >= thr)
+    if len(xs) == 0:
+        cyx = np.unravel_index(int(grid.argmax()), grid.shape)
+        ys, xs = np.array([cyx[0]]), np.array([cyx[1]])
+
+    w = grid[ys, xs].astype(np.float64)
+    wsum = float(w.sum()) + 1e-6
+    cx = float((xs * w).sum() / wsum)
+    cy = float((ys * w).sum() / wsum)
+    if len(xs) > 1:
+        spread = float(np.sqrt((((xs - cx) ** 2 + (ys - cy) ** 2) * w).sum()
+                               / wsum))
+    else:
+        spread = 0.7
+
+    hot = {
+        "x":         round((cx + 0.5) / grid_size, 4),
+        "y":         round((cy + 0.5) / grid_size, 4),
+        "r":         round(min(0.42, max(0.12, (spread + 0.9) / grid_size)), 4),
+        "intensity": round(intensity, 3),
+    }
+    if prev:
+        hot = {k: round(alpha * hot[k] + (1.0 - alpha) * prev.get(k, hot[k]), 4)
+               for k in hot}
+    return hot
+
+
 def _calibrate(frames: list[np.ndarray]) -> int:
     """
     Establish the anomaly baseline on the opening (assumed calm) frames so the
@@ -503,6 +579,8 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
         "peak_physics":    peak_physics,
         "forecast":        forecast,
         "trend":           trend,
+        "hotspot":         (_danger_hotspot(peak_flow)
+                            if peak_flow is not None else None),
         "agent_trace":     trace,
     }
 
@@ -559,6 +637,7 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
         peak_physics = None
         last_forecast = None
         forecast_count = 0
+        hot_ema: dict | None = None
         GIF_STRIDE = 2
         GIF_MAX_FRAMES = 80
         target_dt = 1.0 / max(STREAM_PACE_FPS, 1.0)
@@ -596,21 +675,35 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
 
             tick = {"type": "tick", "step": step, **point}
 
-            # Rolling forecast: re-roll the world model forward from now.
-            if (physics["status"] != "CALIBRATING"
-                    and step % FORECAST_EVERY == 0 and len(feat_history) >= 5):
-                forecast_count += 1
-                render_field = (physics["status"] == "DANGER"
-                                or forecast_count % FIELD_EVERY_FORECASTS == 0)
-                fc = _forecast_future(feat_history,
-                                      physics.get("probability", 0.0), fps,
-                                      render_field=render_field)
-                if fc and not fc.get("error"):
-                    last_forecast = fc
-                    tick["forecast"] = fc
+            # The exact analyzed frame (so the UI overlays the marker on the
+            # same pixels the hotspot was computed from → perfect alignment).
+            fb = _frame_to_jpeg_b64(curr)
+            if fb:
+                tick["frame_b64"] = fb
+
+            # Region of danger — recomputed and smoothed every frame so the
+            # live marker tracks the building pressure continuously.
+            hot_ema = _danger_hotspot(flow, prev=hot_ema)
+            tick["hotspot"] = hot_ema
+
+            if physics["status"] != "CALIBRATING":
+                # Minutes-ahead trend is cheap → refresh it every frame so the
+                # projection moves continuously (feels live).
                 tr = _project_trend(timeline)
                 if tr:
                     tick["trend"] = tr
+
+                # World-model roll-forward is heavier → keep it on a cadence.
+                if step % FORECAST_EVERY == 0 and len(feat_history) >= 5:
+                    forecast_count += 1
+                    render_field = (physics["status"] == "DANGER"
+                                    or forecast_count % FIELD_EVERY_FORECASTS == 0)
+                    fc = _forecast_future(feat_history,
+                                          physics.get("probability", 0.0), fps,
+                                          render_field=render_field)
+                    if fc and not fc.get("error"):
+                        last_forecast = fc
+                        tick["forecast"] = fc
 
             yield _ndjson(tick)
             prev_frame = curr
@@ -674,6 +767,8 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
             "peak_physics":    peak_physics,
             "forecast":        final_forecast,
             "trend":           _project_trend(timeline),
+            "hotspot":         (_danger_hotspot(peak_flow)
+                                if peak_flow is not None else None),
             "peak_frame_b64":  (_frame_to_b64(peak_frame)
                                 if peak_frame is not None else None),
             "flow_gif_b64":    flow_gif_b64,

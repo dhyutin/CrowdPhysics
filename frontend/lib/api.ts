@@ -75,6 +75,8 @@ export interface LiveTick {
   probability?: number;
   forecast?: Forecast;
   trend?: Trend;
+  hotspot?: Hotspot;
+  frame_b64?: string;
   // calibrating
   venue?: string;
   fps?: number;
@@ -254,6 +256,14 @@ export interface Forecast {
   error?: string;
 }
 
+// Normalized region of danger on the frame (x,y,r in [0,1]).
+export interface Hotspot {
+  x: number;
+  y: number;
+  r: number;
+  intensity: number;
+}
+
 // Minutes-ahead statistical trend projection (NOT the world-model rollout).
 export interface Trend {
   points?: ForecastPoint[];
@@ -283,6 +293,7 @@ export interface AnalyzeResult {
   peak_physics: Record<string, unknown> | null;
   forecast?: Forecast | null;
   trend?: Trend | null;
+  hotspot?: Hotspot | null;
   agent_trace?: AgentTraceStep[];
 }
 

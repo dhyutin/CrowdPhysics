@@ -82,10 +82,17 @@ class CrowdPhysicsDetector:
 
         if errors:
             self.baseline_mean = float(np.mean(errors))
-            self.baseline_std = float(np.std(errors)) + 1e-6
+            # Floor the std so it can't collapse toward zero on near-constant
+            # calibration footage — otherwise (error - mean)/std explodes to
+            # thousands of σ and the detector latches DANGER permanently.
+            raw_std = float(np.std(errors))
+            self.baseline_std = max(raw_std,
+                                    0.15 * abs(self.baseline_mean),
+                                    1e-3)
             self.calibrated = True
             print(f"[calibrated] baseline={self.baseline_mean:.5f} "
-                  f"± {self.baseline_std:.5f} ({len(errors)} samples)")
+                  f"± {self.baseline_std:.5f} (raw σ={raw_std:.5f}, "
+                  f"{len(errors)} samples)")
         else:
             self.baseline_mean = 0.01
             self.baseline_std = 0.005
@@ -145,6 +152,10 @@ class CrowdPhysicsDetector:
             score = (error - self.baseline_mean) / self.baseline_std
         else:
             score = error * 50
+
+        # Clamp to a sane σ range: anything past ~10σ is already maxed-out
+        # DANGER, and huge values just break the UI / probability mapping.
+        score = float(np.clip(score, -3.0, 10.0))
 
         # Crush probability via sigmoid centred at threshold
         prob = float(1 / (1 + np.exp(-score + 1.5)))

@@ -10,6 +10,7 @@ import {
   type TimelinePoint,
   type Forecast,
   type Trend,
+  type Hotspot,
   type CaptureSource,
   type LiveTick,
 } from "@/lib/api";
@@ -147,6 +148,8 @@ export default function MonitorTab() {
   const [liveTicks, setLiveTicks]   = useState<TimelinePoint[]>([]);
   const [liveForecast, setLiveForecast] = useState<Forecast | null>(null);
   const [liveTrend, setLiveTrend]   = useState<Trend | null>(null);
+  const [liveHotspot, setLiveHotspot] = useState<Hotspot | null>(null);
+  const [liveFrame, setLiveFrame]   = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState("CALIBRATING");
   const [liveNow, setLiveNow]       = useState(0);
   const [liveScore, setLiveScore]   = useState(0);
@@ -185,6 +188,11 @@ export default function MonitorTab() {
     setLiveView(null);
     setLiveSession(null);
     setResult(null);
+    setLiveTicks([]);
+    setLiveForecast(null);
+    setLiveTrend(null);
+    setLiveHotspot(null);
+    setLiveFrame(null);
     setPreviewErr(null);
     setPreviewLoading(true);
     try {
@@ -229,12 +237,19 @@ export default function MonitorTab() {
     abortRef.current = ac;
 
     setError(null);
-    setResult(null);
     setLoad(true);
     setStreaming(true);
-    setLiveTicks([]);
-    setLiveForecast(null);
-    setLiveTrend(null);
+    // Upload starts each run from a clean slate. Live monitoring loops, so we
+    // KEEP the last pass's forecast/trend/hotspot/result visible during the
+    // capture gap — they refresh as new ticks arrive (feels continuous).
+    if (mode === "upload") {
+      setResult(null);
+      setLiveTicks([]);
+      setLiveForecast(null);
+      setLiveTrend(null);
+      setLiveHotspot(null);
+      setLiveFrame(null);
+    }
     setLiveStatus("CALIBRATING");
     setLiveNow(0);
     setLiveScore(0);
@@ -259,6 +274,10 @@ export default function MonitorTab() {
           setLiveTotal(ev.total_frames ?? 0);
           setLiveStatus("CALIBRATING");
           setLivePhase("Streaming live…");
+          // New pass begins → reset only the per-frame timeline; keep the
+          // rolling forecast/trend/marker from the prior pass until refreshed.
+          setLiveTicks([]);
+          setResult(null);
           break;
         case "tick": {
           const pt: TimelinePoint = {
@@ -276,6 +295,8 @@ export default function MonitorTab() {
           setLiveScore(pt.score);
           if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
           if (ev.trend) setLiveTrend(ev.trend);
+          if (ev.hotspot) setLiveHotspot(ev.hotspot);
+          if (ev.frame_b64) setLiveFrame(ev.frame_b64);
           break;
         }
         case "done":
@@ -289,11 +310,13 @@ export default function MonitorTab() {
             peak_physics: ev.peak_physics ?? null,
             forecast: ev.forecast ?? null,
             trend: ev.trend ?? null,
+            hotspot: ev.hotspot ?? null,
             agent_trace: ev.agent_trace ?? [],
             source: capturedSource,
           });
           if (ev.forecast && !ev.forecast.error) setLiveForecast(ev.forecast);
           if (ev.trend) setLiveTrend(ev.trend);
+          if (ev.hotspot) setLiveHotspot(ev.hotspot);
           setLivePhase("Complete");
           break;
       }
@@ -340,7 +363,7 @@ export default function MonitorTab() {
   }, "SAFE") ?? "SAFE";
 
   return (
-    <div className="flex h-full gap-0">
+    <div className="flex h-full gap-0 min-h-0">
 
       {/* ── Left controls ──────────────────────────── */}
       <div className="w-52 flex-shrink-0 flex flex-col gap-3 p-4 border-r border-border overflow-y-auto">
@@ -547,37 +570,6 @@ export default function MonitorTab() {
             </div>
           )}
 
-          {/* Danger marker overlaid on the live feed (driven by live ticks) */}
-          {mode === "live" && liveView &&
-            (liveStatus === "DANGER" || liveStatus === "WARNING") && (
-            <div className="pointer-events-none absolute inset-0 z-10">
-              <div
-                className={`absolute inset-0 rounded-xl border-2 ${
-                  liveStatus === "DANGER"
-                    ? "border-crimson animate-pulse"
-                    : "border-amber"
-                }`}
-                style={{
-                  boxShadow:
-                    liveStatus === "DANGER"
-                      ? "inset 0 0 60px rgba(248,81,73,0.25)"
-                      : "inset 0 0 40px rgba(210,153,34,0.18)",
-                }}
-              />
-              <div className="absolute top-3 left-1/2 -translate-x-1/2">
-                <div
-                  className={liveStatus === "DANGER" ? "badge-danger" : "badge-warning"}
-                >
-                  <span
-                    className={liveStatus === "DANGER" ? "dot-danger" : "dot-warning"}
-                  />
-                  {liveStatus === "DANGER" ? "DANGER DETECTED" : "ELEVATED RISK"} ·{" "}
-                  {liveScore.toFixed(1)}σ
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Live analyzing pill */}
           {mode === "live" && liveView && streaming && (
             <div className="pointer-events-none absolute bottom-3 left-3 z-10 font-mono text-[9px] text-text2 bg-void/75 px-2 py-1 rounded flex items-center gap-1.5">
@@ -594,7 +586,7 @@ export default function MonitorTab() {
       </div>
 
       {/* ── Analysis (right half) ────────────────────── */}
-      <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto min-w-0">
+      <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto min-w-0 min-h-0">
         <div className="flex items-center justify-between">
           <p className="panel-label">Analysis</p>
           {streaming ? (
