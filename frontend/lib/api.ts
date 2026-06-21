@@ -529,6 +529,53 @@ export interface SimulateResult {
   layout?: VenueLayout;
 }
 
+// Expected entry/exit flow recovered by running the simulation as synthetic
+// crowd video through the SAME RAFT optical-flow extractor used on live cameras.
+export type PortMode = "inflow" | "outflow" | "mixed";
+export interface PortFlow {
+  label: string;
+  type: "entry" | "exit";
+  x: number;          // normalized centre
+  y: number;
+  dir_x: number;      // recovered flow direction (image space, unit-ish)
+  dir_y: number;
+  speed_px: number;   // mean moving-pixel speed at the door
+  intensity: number;  // 0-1 relative to the busiest sustained flow
+  flux: number;       // signed: + into venue, - out of venue
+  mode: PortMode;
+  share: number;      // fraction of total throughput across ports
+}
+export interface ExpectedFlowResult {
+  ports: PortFlow[];
+  annotated_b64: string; // synthetic frame with recovered per-port flow drawn on
+  field_b64: string;     // RAFT-derived pressure field (live-monitor viz)
+  sample_b64: string;    // raw synthetic-crowd frame RAFT actually sees
+  flow_backend: string;  // "raft" | "farneback"
+  pairs: number;
+  summary: string;
+  error?: string;
+}
+
+export async function simulateExpectedFlow(
+  elements: VenueLayoutElement[],
+  density: number,
+  venueName = "Venue"
+): Promise<ExpectedFlowResult> {
+  const res = await fetch(`${BASE}/api/simulate_flow`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      elements: elements.map((e) => ({
+        type: e.type, x: e.x, y: e.y, w: e.w, h: e.h, label: e.label ?? "",
+      })),
+      density,
+      venue_name: venueName,
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export interface PlanResult extends SimulateResult {
   plan: string;
   purpose: string;

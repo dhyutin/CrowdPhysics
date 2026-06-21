@@ -542,6 +542,128 @@ class CrowdSimulator:
 
         return canvas
 
+    # ── SYNTHETIC CROWD VIDEO (for the optical-flow loop) ──────────────────────
+
+    def render_flow_frames(self,
+                           record: Dict,
+                           size: Tuple[int, int] = (360, 480),
+                           n_particles: int = 1100,
+                           seed: int = 7) -> List[np.ndarray]:
+        """
+        Turn a recorded field timeline into a sequence of SYNTHETIC CROWD FRAMES
+        that the real RAFT/Farneback optical-flow extractor can track.
+
+        The pressure-grid simulator has no people — only fields. Optical flow,
+        however, needs apparent *pixel* motion. So we seed massless particles
+        ("people"), bias them to the entry sources, and advect them through the
+        recorded velocity field. Each particle is drawn as a small blob, so two
+        consecutive frames contain genuine pixel displacement that matches the
+        simulated inflow/outflow.
+
+        Feeding these frames through flow_extractor.extract_flow() closes the
+        loop: simulation → synthetic video → the exact perception pipeline used
+        on a live camera. The flow recovered at the entry/exit rectangles is the
+        flow an operator's optical-flow monitor *should* observe for this layout.
+
+        Args:
+            record: output of run_steps_record() (needs vx, vy, walls, grid).
+            size:   (H, W) of each rendered frame.
+            n_particles: number of synthetic people to advect.
+            seed:   RNG seed for reproducible frames.
+
+        Returns:
+            list[np.ndarray] of BGR uint8 frames, one per recorded timeline step
+            (empty if the timeline is too short).
+        """
+        grid = int(record.get("grid", self.grid))
+        vx = np.asarray(record.get("vx", []), dtype=np.float32)
+        vy = np.asarray(record.get("vy", []), dtype=np.float32)
+        walls = np.asarray(record.get("walls", []), dtype=np.float32)
+        F = int(vx.shape[0]) if vx.ndim == 3 else 0
+        if F < 2:
+            return []
+        if walls.shape != (grid, grid):
+            walls = np.zeros((grid, grid), dtype=np.float32)
+
+        H, W = int(size[0]), int(size[1])
+        rng = np.random.default_rng(seed)
+
+        # Auto-scale velocity → pixels so motion is always visible regardless of
+        # the raw pressure-gradient magnitude (which varies with density/layout).
+        speed = np.sqrt(vx ** 2 + vy ** 2)
+        nz = speed[speed > 1e-5]
+        mean_speed = float(nz.mean()) if nz.size else 1.0
+        # Aim for a typical step of ~1.6% of the field per frame.
+        gain = float(np.clip(0.016 / (mean_speed + 1e-6), 0.02, 0.6))
+
+        free = walls < 0.5
+        free_cells = np.argwhere(free)                      # (gy, gx)
+        src_cells = np.array(self.sources, dtype=int) if self.sources else free_cells
+        if src_cells.size == 0:
+            src_cells = free_cells if free_cells.size else np.array([[grid // 2, grid // 2]])
+
+        def _spawn(n: int) -> np.ndarray:
+            """Spawn n particles: most at entries, the rest scattered indoors."""
+            pos = np.empty((n, 2), dtype=np.float32)        # (x_norm, y_norm)
+            n_src = int(n * 0.62)
+            for k in range(n):
+                pool = src_cells if (k < n_src and src_cells.size) else free_cells
+                gy, gx = pool[rng.integers(len(pool))]
+                pos[k, 0] = (gx + rng.random()) / grid
+                pos[k, 1] = (gy + rng.random()) / grid
+            return pos
+
+        pos = _spawn(n_particles)
+        # Per-particle warm tint so blobs carry a little texture for the tracker.
+        tint = rng.uniform(0.75, 1.0, size=(n_particles, 1)).astype(np.float32)
+
+        # Faint static blueprint grid — does not move, so adds no spurious flow.
+        bg = np.zeros((H, W, 3), dtype=np.uint8)
+        gc = (12, 20, 34)
+        for gy in range(0, H, max(1, H // grid)):
+            cv2.line(bg, (0, gy), (W, gy), gc, 1)
+        for gx in range(0, W, max(1, W // grid)):
+            cv2.line(bg, (gx, 0), (gx, H), gc, 1)
+
+        frames: List[np.ndarray] = []
+        radius = max(2, W // 220)
+
+        for f in range(F):
+            vfx, vfy = vx[f], vy[f]
+
+            # Sample the field at each particle (nearest cell) and advect.
+            gj = np.clip((pos[:, 0] * grid).astype(int), 0, grid - 1)
+            gi = np.clip((pos[:, 1] * grid).astype(int), 0, grid - 1)
+            step_x = vfx[gi, gj] * gain
+            step_y = vfy[gi, gj] * gain
+            jitter = rng.normal(0.0, 0.0025, size=pos.shape).astype(np.float32)
+            pos[:, 0] += step_x + jitter[:, 0]
+            pos[:, 1] += step_y + jitter[:, 1]
+
+            # Recycle particles that drained out (past the boundary) or hit a wall
+            # back to an entry — preserving the apparent outflow before removal.
+            gj = np.clip((pos[:, 0] * grid).astype(int), 0, grid - 1)
+            gi = np.clip((pos[:, 1] * grid).astype(int), 0, grid - 1)
+            out = (
+                (pos[:, 0] < -0.02) | (pos[:, 0] > 1.02) |
+                (pos[:, 1] < -0.02) | (pos[:, 1] > 1.02) |
+                (~free[gi, gj])
+            )
+            n_out = int(out.sum())
+            if n_out:
+                pos[out] = _spawn(n_out)
+
+            canvas = bg.copy()
+            xs = (pos[:, 0] * W).astype(int)
+            ys = (pos[:, 1] * H).astype(int)
+            inb = (xs >= 0) & (xs < W) & (ys >= 0) & (ys < H)
+            for x, y, t in zip(xs[inb], ys[inb], tint[inb, 0]):
+                col = (int(120 * t), int(150 * t), int(235 * t))   # warm BGR
+                cv2.circle(canvas, (int(x), int(y)), radius, col, -1, cv2.LINE_AA)
+            frames.append(canvas)
+
+        return frames
+
 
 # ─── QUICK TEST ───────────────────────────────────────────────────────────────
 

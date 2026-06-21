@@ -79,6 +79,7 @@ except Exception:
     _TRACER = None
 
 from flow_extractor import (
+    FLOW_BACKEND,
     extract_flow,
     flow_to_features,
     render_pressure_field,
@@ -1476,6 +1477,156 @@ def _run_venue_simulation(config: VenueConfig, capacity: int,
     return result
 
 
+def _expected_port_flow(config: VenueConfig, density: float) -> dict:
+    """
+    The simulation → RAFT bridge.
+
+    Render the simulation as a synthetic-crowd video (massless particles seeded
+    at the entries and advected through the simulated velocity field), then run
+    those frames through the SAME optical-flow extractor used on a live camera.
+    The flow recovered at each entry/exit rectangle is the flow an operator's
+    optical-flow monitor should *expect* to see for this layout — a way to
+    preview perception before the event and validate door placement.
+    """
+    sim = CrowdSimulator(grid_size=20)
+    sim.configure_from_venue(config)
+    record = sim.run_steps_record(n_steps=72, crowd_density=density, stride=1)
+    frames = sim.render_flow_frames(record, size=(240, 320), n_particles=1300)
+    if len(frames) < 2:
+        return {"error": "Simulation produced too few frames for optical flow."}
+
+    H, W = frames[0].shape[:2]
+
+    # Average optical flow over the *established* flow (skip the empty warm-up
+    # while the first arrivals are still streaming in), capped for responsiveness.
+    start = max(1, len(frames) // 4)
+    stride = max(1, (len(frames) - start) // 24)
+    acc = None
+    pairs = 0
+    for i in range(start, len(frames), stride):
+        fl = extract_flow(frames[i - stride], frames[i]).astype(np.float32)
+        acc = fl if acc is None else acc + fl
+        pairs += 1
+    avg = acc / max(1, pairs)                       # (H, W, 2), px per pair
+    mag_map = np.hypot(avg[:, :, 0], avg[:, :, 1])
+    MOVING = 0.25                                   # px threshold for "in motion"
+
+    # Reference speed = strongest sustained flow anywhere → makes per-port
+    # intensities relative and comparable (busiest door ≈ 100%).
+    moving_all = mag_map[mag_map > MOVING]
+    ref = float(np.percentile(moving_all, 92)) if moving_all.size else 1.0
+    ref = max(ref, 1e-2)
+
+    # Venue centre = centroid of walkable cells → defines the "inward" normal.
+    free = np.argwhere(~sim.walls)
+    if len(free):
+        cy = float(free[:, 0].mean()) / sim.grid
+        cx = float(free[:, 1].mean()) / sim.grid
+    else:
+        cx = cy = 0.5
+
+    ports: list[dict] = []
+    for el in config.elements:
+        if el.type not in ("entry", "gate"):
+            continue
+        pcx = el.x + el.w / 2.0
+        pcy = el.y + el.h / 2.0
+        # Sample a band over the doorway, nudged toward the interior.
+        ix = pcx + (cx - pcx) * 0.18
+        iy = pcy + (cy - pcy) * 0.18
+        hw = max(el.w, 0.06) / 2.0 + 0.05
+        hh = max(el.h, 0.06) / 2.0 + 0.05
+        x0 = int(np.clip(ix - hw, 0, 1) * W)
+        x1 = int(np.clip(ix + hw, 0, 1) * W)
+        y0 = int(np.clip(iy - hh, 0, 1) * H)
+        y1 = int(np.clip(iy + hh, 0, 1) * H)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        rfx = avg[y0:y1, x0:x1, 0]
+        rfy = avg[y0:y1, x0:x1, 1]
+        rmag = np.hypot(rfx, rfy)
+        # Magnitude-weighted direction (empty background ~0 weight) + the mean
+        # speed of the pixels that are actually moving.
+        wsum = float(rmag.sum())
+        if wsum > 1e-6:
+            mfx = float((rfx * rmag).sum() / wsum)
+            mfy = float((rfy * rmag).sum() / wsum)
+        else:
+            mfx = mfy = 0.0
+        mv = rmag > MOVING
+        speed = float(rmag[mv].mean()) if mv.any() else 0.0
+        dirmag = float(np.hypot(mfx, mfy)) + 1e-6
+
+        inx, iny = cx - pcx, cy - pcy
+        ninv = float(np.hypot(inx, iny)) + 1e-6
+        inx, iny = inx / ninv, iny / ninv
+        flux = (mfx * inx + mfy * iny) / dirmag * speed   # signed, in px units
+        intensity = float(np.clip(speed / ref, 0, 1))
+        tol = 0.12 * ref
+        mode = "inflow" if flux > tol else "outflow" if flux < -tol else "mixed"
+
+        ports.append({
+            "label":     el.label or el.type.upper(),
+            "type":      "entry" if el.type == "entry" else "exit",
+            "x":         round(pcx, 3),
+            "y":         round(pcy, 3),
+            "dir_x":     round(mfx / dirmag, 3),
+            "dir_y":     round(mfy / dirmag, 3),
+            "speed_px":  round(speed, 2),
+            "intensity": round(intensity, 3),
+            "flux":      round(flux / ref, 3),
+            "mode":      mode,
+        })
+
+    tot = sum(p["intensity"] for p in ports) or 1.0
+    for p in ports:
+        p["share"] = round(p["intensity"] / tot, 3)
+
+    # Annotate a representative synthetic frame with the recovered port flow.
+    annotated = frames[len(frames) // 2].copy()
+    for p in ports:
+        cxp, cyp = int(p["x"] * W), int(p["y"] * H)
+        col = ((95, 235, 120) if p["mode"] == "inflow"
+               else (40, 160, 235) if p["mode"] == "outflow"
+               else (180, 180, 180))
+        L = int(16 + 46 * p["intensity"])
+        ex = int(cxp + p["dir_x"] * L)
+        ey = int(cyp + p["dir_y"] * L)
+        cv2.circle(annotated, (cxp, cyp), 6, col, 2, cv2.LINE_AA)
+        cv2.arrowedLine(annotated, (cxp, cyp), (ex, ey), col, 2, tipLength=0.35)
+        cv2.putText(annotated,
+                    f"{p['label']} {p['mode']} {int(p['intensity']*100)}%",
+                    (cxp + 8, max(12, cyp - 8)), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.38, col, 1, cv2.LINE_AA)
+
+    # RAFT-derived pressure field — the same visual the live monitor produces.
+    field, _ = render_pressure_field(
+        avg * 6.0, {"status": "SAFE", "score": 0.0, "probability": 0.0},
+        frame_shape=(H, W), show_risk_hud=False)
+
+    n_in = sum(1 for p in ports if p["type"] == "entry")
+    n_out = sum(1 for p in ports if p["type"] == "exit")
+    busiest = max(ports, key=lambda q: q["intensity"], default=None)
+    summary = (
+        f"RAFT optical flow recovered over {pairs} synthetic-crowd frame pairs — "
+        f"{n_in} entr{'y' if n_in == 1 else 'ies'}, "
+        f"{n_out} exit{'' if n_out == 1 else 's'}."
+    )
+    if busiest:
+        summary += (f" Heaviest flow at {busiest['label']} "
+                    f"({busiest['mode']}, {int(busiest['intensity'] * 100)}% intensity).")
+
+    return {
+        "ports":         ports,
+        "annotated_b64": _frame_to_b64(annotated),
+        "field_b64":     _frame_to_b64(field),
+        "sample_b64":    _frame_to_b64(frames[len(frames) // 3]),
+        "flow_backend":  FLOW_BACKEND,
+        "pairs":         pairs,
+        "summary":       summary,
+    }
+
+
 @app.post("/api/simulate")
 def simulate(req: SimulateRequest):
     """
@@ -1516,6 +1667,72 @@ def simulate(req: SimulateRequest):
 
     return JSONResponse(_numpy_clean(
         _run_venue_simulation(config, req.capacity, req.density)))
+
+
+class FlowElement(BaseModel):
+    type:  str
+    x:     float
+    y:     float
+    w:     float
+    h:     float
+    label: str = ""
+
+
+class SimulateFlowRequest(BaseModel):
+    """Either pass an explicit layout (from the 3D reconstruction) or fall back
+    to the same parametric preset as /api/simulate."""
+    elements:   list[FlowElement] = []
+    density:    float = 0.65
+    venue_name: str = "Venue"
+    n_exits:    int = 2
+
+
+@app.post("/api/simulate_flow")
+def simulate_flow(req: SimulateFlowRequest):
+    """
+    Render the simulation as synthetic-crowd video, pass it through RAFT optical
+    flow, and return the flow expected at each entry/exit port.
+
+    Returns:
+      ports          per-door {label,type,x,y,dir_x,dir_y,intensity,share,mode}
+      annotated_b64  synthetic frame with the recovered per-port flow drawn on
+      field_b64      RAFT-derived pressure field (same viz as the live monitor)
+      sample_b64     a raw synthetic-crowd frame (what RAFT actually sees)
+      flow_backend   "raft" | "farneback"
+      summary        one-line description
+    """
+    if req.elements:
+        elements = [
+            VenueElement(type=e.type, x=e.x, y=e.y, w=e.w, h=e.h, label=e.label)
+            for e in req.elements
+        ]
+    else:
+        n_exits = max(1, min(req.n_exits, 4))
+        elements = [
+            VenueElement("stage", 0.2, 0.05, 0.6, 0.22, label="STAGE"),
+            VenueElement("wall",  0.0, 0.0,  0.04, 1.0),
+            VenueElement("wall",  0.96, 0.0, 0.04, 1.0),
+            VenueElement("wall",  0.0, 0.0,  1.0,  0.04),
+            VenueElement("wall",  0.0, 0.96, 1.0,  0.04),
+            VenueElement("entry", 0.38, 0.87, 0.24, 0.08, label="MAIN ENTRY"),
+        ]
+        exit_positions = [
+            (0.04, 0.45, "EXIT A"), (0.88, 0.45, "EXIT B"),
+            (0.44, 0.88, "EXIT C"), (0.44, 0.04, "EXIT D"),
+        ]
+        for i in range(n_exits):
+            x, y, label = exit_positions[i]
+            elements.append(VenueElement("gate", x, y, 0.08, 0.10, label=label))
+
+    has_access = any(e.type in ("entry", "gate") for e in elements)
+    if not has_access:
+        return JSONResponse(
+            {"error": "No entry or exit was found in the layout, so there is no "
+                      "port flow to estimate. Add an entrance / exit and retry."},
+            status_code=400)
+
+    config = VenueConfig(name=req.venue_name, total_capacity=0, elements=elements)
+    return JSONResponse(_numpy_clean(_expected_port_flow(config, req.density)))
 
 
 _VISION_MEDIA = {

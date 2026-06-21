@@ -8,6 +8,7 @@ import EventIntake, { type IntakeValue } from "@/components/EventIntake";
 import ScenarioCompare from "@/components/ScenarioCompare";
 import PlaybackBar from "@/components/PlaybackBar";
 import PlanPoints from "@/components/PlanPoints";
+import ExpectedFlowPanel from "@/components/ExpectedFlowPanel";
 import { buildVenuePins, hasAccessPoints, assumedAccessElements } from "@/lib/venuePins";
 
 import type { CrowdPhase } from "@/components/Venue3D";
@@ -618,6 +619,13 @@ export default function PlanTab() {
                   </div>
                 </div>
               </div>
+
+              {/* Expected entry/exit flow — simulation passed through RAFT */}
+              <ExpectedFlowPanel
+                key={selected.id}
+                layout={selected.layout}
+                density={(parseInt(intake.density) || 65) / 100}
+              />
 
               {/* Fix the 3D scene — conversational layout editing */}
               <div className="card flex flex-col animate-fade-in">
