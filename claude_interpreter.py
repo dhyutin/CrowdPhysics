@@ -916,13 +916,36 @@ Output ONLY this JSON (no markdown):
 
 # ─── ROLE 7d: AGENT-LLM BEHAVIOR PLANNER ──────────────────────────────────────
 
-def _behaviors_from_layout(layout) -> dict:
+def _behaviors_from_layout(layout, purpose="general gathering") -> dict:
     """
     Deterministic fallback used when the LLM is unavailable: derive plausible
     crowd intents directly from the detected structure (head for the stage,
-    drain to the gates, mill in the open middle).
+    drain to the gates, mill in the open middle). Occasion-aware: the dominant
+    in-venue `mode` and excursion rate are inferred from the event purpose.
     """
     elements = layout.get("elements", []) or []
+    p = (purpose or "").lower()
+
+    def _has(*kw):
+        return any(k in p for k in kw)
+
+    seated_event = _has("dinner", "banquet", "gala", "wedding", "ceremony",
+                        "conference", "talk", "lecture", "meeting", "seated",
+                        "screening", "theater", "theatre")
+    concert_event = _has("concert", "show", "gig", "festival", "rave",
+                         "performance", "music", "rally", "match", "game")
+    browse_event = _has("market", "expo", "fair", "exhibition", "gallery",
+                        "museum", "booth", "trade")
+
+    # Default in-venue conduct + how many step out and back for this occasion.
+    if seated_event:
+        stay_mode, stay_excursion = "seated", 0.05
+    elif browse_event:
+        stay_mode, stay_excursion = "browse", 0.15
+    elif concert_event:
+        stay_mode, stay_excursion = "roam", 0.25
+    else:
+        stay_mode, stay_excursion = "roam", 0.1
 
     def _center(e):
         return [round(float(e.get("x", 0)) + float(e.get("w", 0)) / 2, 3),
@@ -935,16 +958,24 @@ def _behaviors_from_layout(layout) -> dict:
     if stage:
         behaviors.append({"name": "Toward the stage", "goal": _center(stage),
                           "fraction": 0.45, "speed": 1.2,
+                          "mode": "seated" if seated_event else "press",
+                          "excursion": round(stay_excursion * 0.5, 2),
                           "intent": "press toward the main attraction"})
     if gates:
         g = gates[0]
         behaviors.append({"name": "Exit seekers", "goal": _center(g),
                           "fraction": 0.3, "speed": 1.1,
+                          "mode": "queue", "excursion": stay_excursion,
                           "intent": "make for the nearest way out"})
     behaviors.append({"name": "Wanderers", "goal": [0.5, 0.55],
                       "fraction": 0.25 if behaviors else 1.0, "speed": 0.7,
+                      "mode": stay_mode, "excursion": stay_excursion,
                       "intent": "drift around the open floor"})
     return {"llm_fraction": 0.3, "behaviors": behaviors, "source": "layout"}
+
+
+# Behavior modes the simulator understands for in-venue conduct.
+_AGENT_MODES = {"seated", "roam", "press", "queue", "browse"}
 
 
 def _sanitize_behaviors(data) -> dict:
@@ -959,13 +990,22 @@ def _sanitize_behaviors(data) -> dict:
             gx = float(b["goal"][0]); gy = float(b["goal"][1])
         except Exception:
             continue
+        mode = str(b.get("mode", "")).strip().lower()
+        if mode not in _AGENT_MODES:
+            mode = "roam"
+        try:
+            excursion = round(min(0.6, max(0.0, float(b.get("excursion", 0.0) or 0.0))), 2)
+        except Exception:
+            excursion = 0.0
         clean.append({
-            "name":     str(b.get("name", "Group"))[:32],
-            "goal":     [round(min(0.97, max(0.03, gx)), 3),
-                         round(min(0.97, max(0.03, gy)), 3)],
-            "fraction": float(b.get("fraction", 0.0) or 0.0),
-            "speed":    round(min(1.8, max(0.4, float(b.get("speed", 1.0) or 1.0))), 2),
-            "intent":   str(b.get("intent", ""))[:80],
+            "name":      str(b.get("name", "Group"))[:32],
+            "goal":      [round(min(0.97, max(0.03, gx)), 3),
+                          round(min(0.97, max(0.03, gy)), 3)],
+            "fraction":  float(b.get("fraction", 0.0) or 0.0),
+            "speed":     round(min(1.8, max(0.4, float(b.get("speed", 1.0) or 1.0))), 2),
+            "mode":      mode,
+            "excursion": excursion,
+            "intent":    str(b.get("intent", ""))[:80],
         })
     if not clean:
         return {}
@@ -1012,12 +1052,21 @@ EXPECTED CROWD: {n_people or "unspecified"}
 
 Define 2-4 behavior groups that together describe realistic intent for THIS event and layout (e.g. press toward a stage, drain to exits, queue at a gate, browse the middle, gather at a feature). For each give a goal point inside the venue.
 
+For each group also choose a `mode` describing how people behave WHILE INSIDE, appropriate to the EVENT:
+- "seated"  hold a roughly fixed spot (dinner, banquet, talk, ceremony)
+- "roam"    wander loosely around an area (concert crowd, mingling)
+- "press"   push toward a focal point such as a stage
+- "queue"   line up toward a gate or feature
+- "browse"  drift between features/booths (market, expo, gallery)
+
+And set `excursion` (0-1): the share of that group that, mid-event, temporarily steps OUT through an exit and RETURNS later through an entry (bar/restroom/smoke breaks). Higher for casual standing events (concert/festival ~0.2-0.3), near 0 for seated dinners or talks.
+
 Also pick llm_fraction: the share of agents (0.05-0.8) that should be driven by these reasoned intents; the rest follow pure crowd physics.
 
 Output ONLY JSON:
 {{"llm_fraction": 0.3,
   "behaviors": [
-    {{"name": "short label", "goal": [x, y], "fraction": 0.5, "speed": 1.2, "intent": "one short phrase"}}
+    {{"name": "short label", "goal": [x, y], "fraction": 0.5, "speed": 1.2, "mode": "roam", "excursion": 0.1, "intent": "one short phrase"}}
   ]}}
 Fractions across behaviors should sum to ~1."""
 
@@ -1044,7 +1093,7 @@ Fractions across behaviors should sum to ~1."""
             return plan
     except Exception:
         pass
-    return _behaviors_from_layout(layout)
+    return _behaviors_from_layout(layout, purpose)
 
 
 # ─── ROLE 7e: RECONSTRUCTION FIDELITY EVALUATOR (Arize-traced) ────────────────

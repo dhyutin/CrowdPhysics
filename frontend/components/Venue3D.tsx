@@ -64,6 +64,36 @@ function isWall(walls: number[][], G: number, nx: number, ny: number): boolean {
   return walls?.[gy]?.[gx] === 1;
 }
 
+// Obstacle-avoidance: accumulate a normalized push AWAY from nearby obstacle
+// cells (walls / stage / barriers) so agents flow around them through the free
+// path instead of jamming against them. Samples a small neighborhood in grid
+// space; closer obstacles push harder (~1/d²). Returns a vector in layout space.
+function wallRepulse(
+  walls: number[][], G: number, nx: number, ny: number, radius = 2
+): [number, number] {
+  if (!walls) return [0, 0];
+  const gx = Math.floor(nx * G);
+  const gy = Math.floor(ny * G);
+  let rx = 0, ry = 0;
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const cy = gy + dy, cx = gx + dx;
+      if (cy < 0 || cy >= G || cx < 0 || cx >= G) continue;
+      if (walls[cy]?.[cx] !== 1) continue;
+      const d2 = dx * dx + dy * dy;
+      const d = Math.sqrt(d2);
+      const w = 1 / d2; // closer obstacle → stronger push
+      rx -= (dx / d) * w;
+      ry -= (dy / d) * w;
+    }
+  }
+  // Cap so a dense cluster of obstacle cells can't fling an agent.
+  const m = Math.hypot(rx, ry);
+  if (m > 2) { rx = (rx / m) * 2; ry = (ry / m) * 2; }
+  return [rx, ry];
+}
+
 const C_LOW = new THREE.Color("#4493F8");
 const C_MID = new THREE.Color("#D29922");
 const C_HIGH = new THREE.Color("#F85149");
@@ -668,6 +698,24 @@ const PH_EXIT = 7;
 const PH_TOTAL = PH_ENTER + PH_STAY + PH_EXIT;
 export type CrowdPhase = 0 | 1 | 2; // 0 entry · 1 staying · 2 exit
 
+// In-venue conduct modes (how a group behaves WHILE INSIDE), encoded as ints
+// for the typed per-agent arrays.
+const M_ROAM = 0, M_SEATED = 1, M_PRESS = 2, M_QUEUE = 3, M_BROWSE = 4;
+function modeCode(m?: string): number {
+  switch (m) {
+    case "seated": return M_SEATED;
+    case "press":  return M_PRESS;
+    case "queue":  return M_QUEUE;
+    case "browse": return M_BROWSE;
+    default:       return M_ROAM;
+  }
+}
+
+// Per-agent excursion state machine: INSIDE → (out via exit) → OUTSIDE →
+// (back via entry) → INSIDE. Lets a fraction of the crowd step out and return
+// mid-event while still obeying the hard enter/exit-port rule.
+const E_INSIDE = 0, E_LEAVING = 1, E_OUTSIDE = 2, E_RETURNING = 3;
+
 function elCenter(e: VenueLayoutElement): [number, number] {
   return [e.x + e.w / 2, e.y + e.h / 2];
 }
@@ -723,6 +771,8 @@ function Agents({
     const pos = new Float32Array(count * 2);
     const home = new Float32Array(count * 2);
     const entryFrom = new Float32Array(count * 2);
+    const entryGate = new Float32Array(count * 2); // the entry PORT (waypoint)
+    const entered = new Uint8Array(count);         // has passed through the entry
     const exitTo = new Float32Array(count * 2);
     const exitOut = new Float32Array(count * 2); // point OUTSIDE the boundary
     const escaped = new Uint8Array(count);       // has cleared the exit gate
@@ -730,11 +780,24 @@ function Agents({
     const speed = new Float32Array(count);
     const isLLM = new Uint8Array(count);
     const local = new Int32Array(count);
+    // Occasion behavior + excursion bookkeeping.
+    const mode = new Uint8Array(count);          // M_* in-venue conduct
+    const estate = new Uint8Array(count);        // E_* excursion state
+    const etimer = new Float32Array(count);      // dwell timer (s) while outside
+    const excurseAt = new Float32Array(count);   // stay-time (s) to step out; -1 = never
 
     const cum: number[] = [];
     let acc = 0;
     for (const b of behaviors) { acc += Math.max(0, b.fraction || 0); cum.push(acc); }
     const totalFrac = acc || 1;
+    // Sample a behavior index by fraction (used for non-LLM agents so occasion
+    // modes apply crowd-wide, not just to the goal-seeking minority).
+    const sampleBehavior = () => {
+      if (!behaviors.length) return -1;
+      const r = Math.random() * totalFrac;
+      let bi = cum.findIndex((c) => r <= c);
+      return bi < 0 ? behaviors.length - 1 : bi;
+    };
     const jit = () => (Math.random() - 0.5) * 0.06;
     const clamp01 = (v: number) => Math.min(0.97, Math.max(0.03, v));
 
@@ -759,6 +822,11 @@ function Agents({
       ix /= inrm; iy /= inrm;
       entryFrom[i * 2] = ep[0] + ix * 0.5 + jit();
       entryFrom[i * 2 + 1] = ep[1] + iy * 0.5 + jit();
+      // The entry PORT itself (just inside the boundary). Agents must reach this
+      // waypoint before heading to their stay spot, so they only ever enter
+      // through an entry gate — never across a wall.
+      entryGate[i * 2] = clamp01(ep[0] + jit() * 0.4);
+      entryGate[i * 2 + 1] = clamp01(ep[1] + jit() * 0.4);
 
       // Exit via the nearest gate to this agent's home spot.
       let best = 0, bd = Infinity;
@@ -776,24 +844,45 @@ function Agents({
       exitOut[i * 2] = ex + ox * 0.6 + jit();
       exitOut[i * 2 + 1] = ey + oy * 0.6 + jit();
 
+      // Resolve which behavior group (and thus mode/excursion) this agent
+      // belongs to. LLM agents are distributed deterministically for stable
+      // visual identity; the rest sample by fraction so the occasion's dominant
+      // mode (e.g. "seated" for a dinner) shapes the whole crowd.
+      let bi = -1;
       if (i < nLLM && behaviors.length) {
         isLLM[i] = 1;
         const t = ((i + 0.5) / Math.max(1, nLLM)) * totalFrac;
-        let bi = cum.findIndex((c) => t <= c);
+        bi = cum.findIndex((c) => t <= c);
         if (bi < 0) bi = behaviors.length - 1;
+        local[i] = llmLocal++;
+      } else {
+        isLLM[i] = 0;
+        bi = sampleBehavior();
+        local[i] = wmLocal++;
+      }
+
+      if (bi >= 0) {
         const b = behaviors[bi];
         goal[i * 2] = b.goal?.[0] ?? 0.5;
         goal[i * 2 + 1] = b.goal?.[1] ?? 0.5;
         speed[i] = b.speed || 1.0;
-        local[i] = llmLocal++;
+        mode[i] = modeCode(b.mode);
+        const exc = Math.max(0, Math.min(0.6, b.excursion ?? 0));
+        // One excursion per cycle for the chosen share, at a random stay-time.
+        excurseAt[i] = Math.random() < exc
+          ? 1.5 + Math.random() * Math.max(0.1, PH_STAY - 3)
+          : -1;
       } else {
-        isLLM[i] = 0;
+        goal[i * 2] = home[i * 2];
+        goal[i * 2 + 1] = home[i * 2 + 1];
         speed[i] = 1.0;
-        local[i] = wmLocal++;
+        mode[i] = M_ROAM;
+        excurseAt[i] = -1;
       }
     }
-    return { pos, home, entryFrom, exitTo, exitOut, escaped, goal, speed,
-             isLLM, local, nLLM, wmCount: count - nLLM };
+    return { pos, home, entryFrom, entryGate, entered, exitTo, exitOut, escaped,
+             goal, speed, isLLM, local, mode, estate, etimer, excurseAt,
+             nLLM, wmCount: count - nLLM };
   }, [count, G, walls, agentPlan, scenario.layout.elements]);
 
   const dummy = useMemo(() => new THREE.Object3D(), []);
@@ -809,8 +898,8 @@ function Agents({
     const pr = scenario.field.pressure[f];
     if (!vx || !vy || !pr) return;
 
-    const { pos, home, entryFrom, exitTo, exitOut, escaped, goal, speed,
-            isLLM, local } = sim;
+    const { pos, home, entryFrom, entryGate, entered, exitTo, exitOut, escaped,
+            goal, speed, isLLM, local, mode, estate, etimer, excurseAt } = sim;
     const moving = playingRef.current;
     // Global speed multiplier scales the whole animation clock uniformly, so
     // the entry/stay/exit choreography stays consistent — just slower/faster.
@@ -830,6 +919,9 @@ function Agents({
         pos[i * 2] = entryFrom[i * 2];
         pos[i * 2 + 1] = entryFrom[i * 2 + 1];
         escaped[i] = 0;
+        entered[i] = 0;
+        estate[i] = E_INSIDE;
+        etimer[i] = 0;
       }
     }
     if (phase !== reportedPhase.current) {
@@ -844,6 +936,7 @@ function Agents({
     const GOAL_K = 1.15;   // goal pull (llm agents, stay)
     const LLM_FIELD = 0.35;
     const MOVE_K = 1.4;    // entry / exit steering strength
+    const AVOID = 0.95;    // obstacle-avoidance strength (flow around obstacles)
 
     const cl = (v: number) => Math.min(G - 1, Math.max(0, v));
 
@@ -860,58 +953,157 @@ function Agents({
       if (moving) {
         const ux = vx[gy][gx];
         const uy = vy[gy][gx];
-        let dx: number, dy: number;
+        let dx = 0, dy = 0;
+        // `crossing` = the agent is moving across the venue boundary (entering,
+        // exiting, or on an excursion in/out) → free movement, ignore walls.
+        let crossing = false;
+        const stayElapsed = tcyc - PH_ENTER;
 
         if (exiting) {
-          // EXIT: funnel to the nearest gate, then keep going straight out of
-          // the venue boundary so the agent leaves the scene and vanishes.
+          // EXIT (global): funnel to the nearest gate, then out of the venue.
           if (!hasEscaped) {
             const gd = Math.hypot(exitTo[i * 2] - nx, exitTo[i * 2 + 1] - ny);
             if (gd < 0.07) escaped[i] = 1;
           }
           const tgtX = escaped[i] ? exitOut[i * 2] : exitTo[i * 2];
           const tgtY = escaped[i] ? exitOut[i * 2 + 1] : exitTo[i * 2 + 1];
-          let tx = tgtX - nx;
-          let ty = tgtY - ny;
-          const dist = Math.hypot(tx, ty) || 1e-3;
-          tx /= dist; ty /= dist;
+          let tx = tgtX - nx, ty = tgtY - ny;
+          const dist = Math.hypot(tx, ty) || 1e-3; tx /= dist; ty /= dist;
           dx = tx * MOVE_K * speed[i] + (Math.random() - 0.5) * NOISE * 0.5;
           dy = ty * MOVE_K * speed[i] + (Math.random() - 0.5) * NOISE * 0.5;
+          crossing = escaped[i] === 1;
         } else if (phase === 0) {
-          // ENTRY: stream from the entrance to the stay spot.
-          let tx = home[i * 2] - nx;
-          let ty = home[i * 2 + 1] - ny;
+          // ENTRY (global): through the entry port, then to the stay spot.
+          if (!entered[i]) {
+            const gd = Math.hypot(
+              entryGate[i * 2] - nx, entryGate[i * 2 + 1] - ny);
+            if (gd < 0.06) entered[i] = 1;
+          }
+          const tgtX = entered[i] ? home[i * 2] : entryGate[i * 2];
+          const tgtY = entered[i] ? home[i * 2 + 1] : entryGate[i * 2 + 1];
+          let tx = tgtX - nx, ty = tgtY - ny;
           const dist = Math.hypot(tx, ty) || 1e-3;
           if (dist < 0.02) { tx = Math.random() - 0.5; ty = Math.random() - 0.5; }
           else { tx /= dist; ty /= dist; }
           dx = tx * MOVE_K * speed[i] + (Math.random() - 0.5) * NOISE;
           dy = ty * MOVE_K * speed[i] + (Math.random() - 0.5) * NOISE;
-        } else if (llmAgent) {
-          // STAY (LLM): goal-seeking intent + a little field so crushes impede.
-          let tx = goal[i * 2] - nx;
-          let ty = goal[i * 2 + 1] - ny;
-          const dist = Math.hypot(tx, ty) || 1e-3;
-          if (dist < 0.06) { tx = Math.random() - 0.5; ty = Math.random() - 0.5; }
-          else { tx /= dist; ty /= dist; }
-          dx = tx * GOAL_K * speed[i] + ux * LLM_FIELD + (Math.random() - 0.5) * NOISE;
-          dy = ty * GOAL_K * speed[i] + uy * LLM_FIELD + (Math.random() - 0.5) * NOISE;
+          crossing = entered[i] === 0;
         } else {
-          // STAY (world model): advect through the simulated flow field.
-          const gpx = pr[gy][cl(gx + 1)] - pr[gy][cl(gx - 1)];
-          const gpy = pr[cl(gy + 1)][gx] - pr[cl(gy - 1)][gx];
-          dx = ux * KV + gpx * KP + (Math.random() - 0.5) * NOISE;
-          dy = uy * KV + gpy * KP + (Math.random() - 0.5) * NOISE;
+          // ── STAY (phase 1) ─────────────────────────────────────────────────
+          // Advance the per-agent excursion state machine: a chosen share steps
+          // OUT through an exit and returns later through an entry — always
+          // respecting the hard port rule.
+          if (estate[i] === E_INSIDE &&
+              excurseAt[i] >= 0 && stayElapsed >= excurseAt[i]) {
+            estate[i] = E_LEAVING;
+            escaped[i] = 0;
+          }
+
+          if (estate[i] === E_LEAVING) {
+            if (!escaped[i]) {
+              const gd = Math.hypot(exitTo[i * 2] - nx, exitTo[i * 2 + 1] - ny);
+              if (gd < 0.07) escaped[i] = 1;
+            }
+            const tgtX = escaped[i] ? exitOut[i * 2] : exitTo[i * 2];
+            const tgtY = escaped[i] ? exitOut[i * 2 + 1] : exitTo[i * 2 + 1];
+            let tx = tgtX - nx, ty = tgtY - ny;
+            const dist = Math.hypot(tx, ty) || 1e-3; tx /= dist; ty /= dist;
+            dx = tx * MOVE_K * speed[i]; dy = ty * MOVE_K * speed[i];
+            crossing = escaped[i] === 1;
+            if (escaped[i] &&
+                (nx < -0.05 || nx > 1.05 || ny < -0.05 || ny > 1.05)) {
+              estate[i] = E_OUTSIDE;
+              etimer[i] = 2 + Math.random() * 4; // dwell outside
+            }
+          } else if (estate[i] === E_OUTSIDE) {
+            etimer[i] -= dt;
+            let tx = exitOut[i * 2] - nx, ty = exitOut[i * 2 + 1] - ny;
+            const dist = Math.hypot(tx, ty) || 1e-3; tx /= dist; ty /= dist;
+            dx = tx * 0.3 + (Math.random() - 0.5) * NOISE;
+            dy = ty * 0.3 + (Math.random() - 0.5) * NOISE;
+            crossing = true;
+            if (etimer[i] <= 0) { estate[i] = E_RETURNING; entered[i] = 0; }
+          } else if (estate[i] === E_RETURNING) {
+            if (!entered[i]) {
+              const gd = Math.hypot(
+                entryGate[i * 2] - nx, entryGate[i * 2 + 1] - ny);
+              if (gd < 0.06) { entered[i] = 1; estate[i] = E_INSIDE; }
+            }
+            const tgtX = entered[i] ? home[i * 2] : entryGate[i * 2];
+            const tgtY = entered[i] ? home[i * 2 + 1] : entryGate[i * 2 + 1];
+            let tx = tgtX - nx, ty = tgtY - ny;
+            const dist = Math.hypot(tx, ty) || 1e-3; tx /= dist; ty /= dist;
+            dx = tx * MOVE_K * speed[i]; dy = ty * MOVE_K * speed[i];
+            crossing = entered[i] === 0;
+          } else {
+            // INSIDE: behave per the occasion mode.
+            const m = mode[i];
+            if (m === M_SEATED) {
+              // hold a fixed seat, only micro-movement (dinner / talk)
+              let tx = home[i * 2] - nx, ty = home[i * 2 + 1] - ny;
+              const dist = Math.hypot(tx, ty) || 1e-3;
+              const pull = dist > 0.02 ? GOAL_K : 0;
+              tx /= dist; ty /= dist;
+              dx = tx * pull * speed[i] + (Math.random() - 0.5) * NOISE * 0.1;
+              dy = ty * pull * speed[i] + (Math.random() - 0.5) * NOISE * 0.1;
+            } else if (m === M_PRESS) {
+              // push hard toward the group goal (e.g. a stage)
+              let tx = goal[i * 2] - nx, ty = goal[i * 2 + 1] - ny;
+              const dist = Math.hypot(tx, ty) || 1e-3;
+              if (dist < 0.05) { tx = Math.random() - 0.5; ty = Math.random() - 0.5; }
+              else { tx /= dist; ty /= dist; }
+              dx = tx * GOAL_K * 1.3 * speed[i] + ux * LLM_FIELD + (Math.random() - 0.5) * NOISE;
+              dy = ty * GOAL_K * 1.3 * speed[i] + uy * LLM_FIELD + (Math.random() - 0.5) * NOISE;
+            } else if (m === M_QUEUE) {
+              // line up toward the exit gate, but stay inside
+              let tx = exitTo[i * 2] - nx, ty = exitTo[i * 2 + 1] - ny;
+              const dist = Math.hypot(tx, ty) || 1e-3;
+              if (dist < 0.04) { tx = Math.random() - 0.5; ty = Math.random() - 0.5; }
+              else { tx /= dist; ty /= dist; }
+              dx = tx * GOAL_K * 0.8 * speed[i] + (Math.random() - 0.5) * NOISE * 0.6;
+              dy = ty * GOAL_K * 0.8 * speed[i] + (Math.random() - 0.5) * NOISE * 0.6;
+            } else if (m === M_BROWSE) {
+              // drift between features: retarget when the goal is reached
+              let tx = goal[i * 2] - nx, ty = goal[i * 2 + 1] - ny;
+              let dist = Math.hypot(tx, ty) || 1e-3;
+              if (dist < 0.05) {
+                goal[i * 2] = 0.12 + Math.random() * 0.76;
+                goal[i * 2 + 1] = 0.12 + Math.random() * 0.76;
+                tx = Math.random() - 0.5; ty = Math.random() - 0.5; dist = 1;
+              }
+              tx /= dist; ty /= dist;
+              dx = tx * GOAL_K * 0.7 * speed[i] + ux * LLM_FIELD * 0.5 + (Math.random() - 0.5) * NOISE;
+              dy = ty * GOAL_K * 0.7 * speed[i] + uy * LLM_FIELD * 0.5 + (Math.random() - 0.5) * NOISE;
+            } else if (llmAgent) {
+              // ROAM (LLM): goal-seeking intent + a little field.
+              let tx = goal[i * 2] - nx, ty = goal[i * 2 + 1] - ny;
+              const dist = Math.hypot(tx, ty) || 1e-3;
+              if (dist < 0.06) { tx = Math.random() - 0.5; ty = Math.random() - 0.5; }
+              else { tx /= dist; ty /= dist; }
+              dx = tx * GOAL_K * speed[i] + ux * LLM_FIELD + (Math.random() - 0.5) * NOISE;
+              dy = ty * GOAL_K * speed[i] + uy * LLM_FIELD + (Math.random() - 0.5) * NOISE;
+            } else {
+              // ROAM (world model): advect through the simulated flow field.
+              const gpx = pr[gy][cl(gx + 1)] - pr[gy][cl(gx - 1)];
+              const gpy = pr[cl(gy + 1)][gx] - pr[cl(gy - 1)][gx];
+              dx = ux * KV + gpx * KP + (Math.random() - 0.5) * NOISE;
+              dy = uy * KV + gpy * KP + (Math.random() - 0.5) * NOISE;
+            }
+          }
+        }
+
+        // Steer around obstacles toward the free path — but not while crossing
+        // the boundary, where free movement across it is intended.
+        if (!crossing) {
+          const [rx, ry] = wallRepulse(walls, G, nx, ny);
+          dx += rx * AVOID;
+          dy += ry * AVOID;
         }
 
         let cand_x = nx + dx * dt * SPEED;
         let cand_y = ny + dy * dt * SPEED;
 
-        // Free movement across the boundary while streaming IN (entry, still
-        // outside) or OUT (escaped, exit); otherwise stay inside, respect walls.
-        const outsideNow =
-          nx < 0.015 || nx > 0.985 || ny < 0.015 || ny > 0.985;
-        const freeMove = escaped[i] === 1 || (phase === 0 && outsideNow);
-        if (freeMove) {
+        if (crossing) {
           nx = Math.min(1.7, Math.max(-0.7, cand_x));
           ny = Math.min(1.7, Math.max(-0.7, cand_y));
         } else {

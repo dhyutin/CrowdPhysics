@@ -544,11 +544,16 @@ export interface CapacityEstimate {
 // Agent-LLM behavioral world model: groups of agents move toward reasoned
 // goal points; `llm_fraction` of the crowd follows these, the rest move on
 // the physics world model.
+// How a group behaves WHILE INSIDE the venue (occasion-dependent).
+export type AgentMode = "seated" | "roam" | "press" | "queue" | "browse";
+
 export interface AgentBehavior {
   name: string;
   goal: [number, number]; // normalized 0-1 (x,y)
   fraction: number;
   speed: number;
+  mode?: AgentMode;     // in-venue conduct (default "roam")
+  excursion?: number;   // 0-1 share that steps out an exit and returns via entry
   intent: string;
 }
 
