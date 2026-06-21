@@ -1,46 +1,201 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 * { box-sizing: border-box; }
+
 body {
   background: #060a12;
   color: #e2e8f4;
   font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Animations ────────────────────────────────────── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse-ring {
+  0%, 100% { box-shadow: 0 0 0 0   rgba(220,38,38,0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(220,38,38,0);   }
+}
+@keyframes shimmer {
+  from { background-position: -600px 0; }
+  to   { background-position:  600px 0; }
+}
+@keyframes blink-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+.animate-fade-in { animation: fade-in 0.2s ease-out; }
+.danger-pulse    { animation: pulse-ring 1.4s ease-in-out infinite; }
+
+/* ── Spinner ────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid rgba(14,165,233,0.2);
+  border-top-color: #0ea5e9;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.spinner-white {
+  display: inline-block;
+  width: 13px; height: 13px;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+/* ── Skeleton ────────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(90deg, #0f1a2e 25%, #16253a 50%, #0f1a2e 75%);
+  background-size: 600px 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  border-radius: 4px;
 }
 
 @layer components {
-  .mono { font-family: 'JetBrains Mono', monospace; }
-  .display { font-family: 'Space Grotesk', sans-serif; }
+  /* ── Typography ─────────────────────────────────── */
+  .mono    { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+  .display { font-family: 'Space Grotesk', system-ui, sans-serif; }
 
+  /* ── Cards ──────────────────────────────────────── */
   .card {
-    @apply bg-surface border border-border rounded-md overflow-hidden;
+    background: linear-gradient(145deg, #101c30 0%, #0c1524 100%);
+    border: 1px solid #1a2840;
+    border-radius: 10px;
+    overflow: hidden;
   }
-  .card-label {
-    @apply font-mono text-[10px] tracking-widest text-text3 uppercase;
+  .card-inset {
+    background: rgba(6,10,18,0.6);
+    border: 1px solid #1a2840;
+    border-radius: 8px;
   }
+
+  /* ── Panel header ───────────────────────────────── */
+  .panel-header {
+    @apply px-4 py-2.5 border-b border-border flex items-center justify-between;
+    background: rgba(6,10,18,0.3);
+  }
+  .panel-label {
+    @apply font-mono text-[10px] tracking-[0.15em] text-text3 uppercase font-medium;
+  }
+  .card-label { @apply panel-label; }
+
+  /* ── Buttons ────────────────────────────────────── */
   .btn-primary {
-    @apply bg-teal text-void font-semibold px-4 py-2 rounded-md
-           hover:brightness-110 transition-all text-sm;
+    @apply inline-flex items-center justify-center gap-2
+           px-4 py-2 rounded-lg text-sm font-semibold
+           text-white transition-all duration-150
+           disabled:opacity-40 disabled:cursor-not-allowed select-none;
+    background: linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%);
+    box-shadow: 0 1px 3px rgba(14,165,233,0.3), inset 0 1px 0 rgba(255,255,255,0.08);
   }
+  .btn-primary:not(:disabled):hover {
+    background: linear-gradient(135deg, #38bdf8 0%, #0ea5e9 100%);
+    box-shadow: 0 2px 10px rgba(14,165,233,0.4);
+    transform: translateY(-1px);
+  }
+  .btn-primary:not(:disabled):active {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px rgba(14,165,233,0.2);
+  }
+
   .btn-secondary {
-    @apply bg-surface border border-border text-text1 px-4 py-2 rounded-md
-           hover:bg-raised transition-all text-sm;
+    @apply inline-flex items-center justify-center gap-2
+           border border-border text-text1 text-sm
+           px-4 py-2 rounded-lg select-none
+           hover:bg-raised hover:border-text3/30
+           transition-all duration-150;
+    background: linear-gradient(145deg, #101c30 0%, #0c1524 100%);
   }
 
-  .status-safe    { @apply text-emerald border-emerald; }
-  .status-warning { @apply text-amber border-amber; }
-  .status-danger  { @apply text-crimson border-crimson; }
+  /* ── Inputs ─────────────────────────────────────── */
+  .input {
+    @apply w-full border border-border rounded-lg
+           px-3 py-2 text-sm text-text1
+           placeholder:text-text3
+           focus:outline-none focus:border-teal/50 focus:ring-2 focus:ring-teal/10
+           transition-all duration-150;
+    background: rgba(6,10,18,0.7);
+    font-family: inherit;
+  }
+  .input-mono {
+    @apply input;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+  .field-label {
+    @apply block font-mono text-[10px] text-text3 uppercase tracking-wider mb-1.5;
+  }
+
+  /* ── Status badges ───────────────────────────────── */
+  .badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full
+           font-mono text-[10px] font-medium uppercase tracking-wider border;
+  }
+  .badge-safe    { @apply badge bg-emerald/10 text-emerald border-emerald/30; }
+  .badge-warning { @apply badge bg-amber/10   text-amber   border-amber/30; }
+  .badge-danger  { @apply badge bg-crimson/10 text-crimson border-crimson/30; }
+  .badge-neutral { @apply badge bg-surface    text-text3   border-border; }
+  .badge-teal    { @apply badge bg-teal/10    text-teal    border-teal/30; }
+
+  /* ── Live dots ───────────────────────────────────── */
+  .dot-live    { @apply w-1.5 h-1.5 rounded-full bg-emerald; animation: blink-dot 2s ease-in-out infinite; }
+  .dot-warning { @apply w-1.5 h-1.5 rounded-full bg-amber; }
+  .dot-danger  { @apply w-1.5 h-1.5 rounded-full bg-crimson; animation: blink-dot 0.8s ease-in-out infinite; }
+
+  /* ── KPI stat ────────────────────────────────────── */
+  .kpi-label { @apply font-mono text-[9px] text-text3 uppercase tracking-widest; }
+  .kpi-value { @apply display font-bold leading-none; }
+
+  /* ── Table rows ──────────────────────────────────── */
+  .trow { @apply border-b border-border/40 last:border-0 transition-colors duration-100; }
+  .trow:hover { background: rgba(19,32,48,0.5); }
+
+  /* ── Upload zone ─────────────────────────────────── */
+  .upload-zone {
+    @apply flex flex-col items-center justify-center
+           border-2 border-dashed border-border rounded-xl
+           cursor-pointer transition-all duration-200
+           text-text3 text-xs mono;
+  }
+  .upload-zone:hover {
+    @apply border-teal/50 text-teal;
+    background: rgba(14,165,233,0.04);
+  }
+  .upload-zone.has-file {
+    @apply border-teal/40 text-teal;
+    background: rgba(14,165,233,0.06);
+  }
+
+  /* ── Code block ──────────────────────────────────── */
+  .code-block {
+    @apply font-mono text-[11px] text-text2 leading-relaxed whitespace-pre-wrap
+           rounded-lg p-4;
+    background: rgba(6,10,18,0.8);
+    border: 1px solid #1a2840;
+  }
+
+  /* ── Status row ──────────────────────────────────── */
+  .status-safe    { @apply text-emerald; }
+  .status-warning { @apply text-amber; }
+  .status-danger  { @apply text-crimson; }
 }
 
-@keyframes pulse-pill {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.4); }
-  50%       { box-shadow: 0 0 0 6px rgba(220,38,38,0); }
-}
-.danger-pulse { animation: pulse-pill 1s ease infinite; }
-
+/* ── Scrollbar ───────────────────────────────────── */
 ::-webkit-scrollbar       { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: #060a12; }
-::-webkit-scrollbar-thumb { background: #1a2840; border-radius: 2px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1a2840; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #243250; }
