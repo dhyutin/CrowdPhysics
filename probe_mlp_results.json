@@ -1,0 +1,44 @@
+{
+  "baseline": {
+    "crowd_velocity": {
+      "linear": 0.493,
+      "mlp": 0.539
+    },
+    "turbulence": {
+      "linear": 0.18,
+      "mlp": 0.328
+    },
+    "backward_pressure": {
+      "linear": 0.47,
+      "mlp": 0.564
+    },
+    "boundary_stress": {
+      "linear": 0.066,
+      "mlp": 0.259
+    },
+    "mean_linear": 0.302,
+    "mean_mlp": 0.422
+  },
+  "vla": {
+    "crowd_velocity": {
+      "linear": 0.741,
+      "mlp": 0.659
+    },
+    "turbulence": {
+      "linear": 0.255,
+      "mlp": 0.0
+    },
+    "backward_pressure": {
+      "linear": 0.713,
+      "mlp": 0.619
+    },
+    "boundary_stress": {
+      "linear": 0.0,
+      "mlp": 0.09
+    },
+    "mean_linear": 0.427,
+    "mean_mlp": 0.342
+  },
+  "cv_splits": 3,
+  "gap_closed": false
+}

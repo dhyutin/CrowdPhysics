@@ -58,35 +58,43 @@ def youtube_video_id(url: str) -> str | None:
     return None
 
 
+_EMBED_HOST = "https://example.com/"
+
+
 def _load_youtube_embed(page, video_id: str, nav_timeout_ms: int = 60000) -> None:
     """
-    Play a YouTube video inside a cloud browser without the sign-in wall AND
-    without the "Error 153 / player configuration" failure.
+    Play a YouTube video inside a cloud browser the same way any normal website
+    does: load a neutral third-party host page and inject the standard <iframe>
+    embed into it.
 
-    Navigating straight to the embed URL loads it as a TOP-LEVEL document with
-    no valid parent origin, which YouTube's player rejects (Error 153). Instead
-    we land on youtube.com (an origin YouTube always allows to embed) and inject
-    a full-viewport <iframe> embed into it, so the player gets a valid origin.
+    Why not navigate straight to the embed URL or frame it inside youtube.com?
+      • Top-level navigation to the embed URL has no parent origin → Error 153.
+      • Framing the embed inside youtube.com trips YouTube's own page CSP /
+        Trusted Types and yields "video unavailable" config errors (152).
+    A plain external origin (example.com) is exactly the context YouTube's
+    embed player expects, so embeddable videos play normally.
     """
-    page.goto("https://www.youtube.com", wait_until="domcontentloaded",
+    page.goto(_EMBED_HOST, wait_until="domcontentloaded",
               timeout=nav_timeout_ms)
-    time.sleep(1.0)
-    _dismiss_consent(page)
+    time.sleep(0.5)
     page.evaluate(
-        """(id) => {
+        """([id, origin]) => {
             document.documentElement.style.margin = '0';
-            document.body.innerHTML = '';
+            document.body.replaceChildren();
             document.body.style.cssText = 'margin:0;background:#000;overflow:hidden';
             const f = document.createElement('iframe');
             f.src = 'https://www.youtube.com/embed/' + id +
-                '?autoplay=1&mute=1&playsinline=1&rel=0&controls=0&modestbranding=1';
-            f.allow = 'autoplay; encrypted-media; fullscreen';
+                '?autoplay=1&mute=1&playsinline=1&rel=0&controls=0' +
+                '&modestbranding=1&origin=' + encodeURIComponent(origin);
+            f.allow = 'accelerometer; autoplay; clipboard-write; ' +
+                'encrypted-media; gyroscope; picture-in-picture; web-share';
             f.setAttribute('frameborder', '0');
+            f.setAttribute('allowfullscreen', '');
             f.style.cssText =
                 'position:fixed;inset:0;width:100vw;height:100vh;border:0';
             document.body.appendChild(f);
         }""",
-        video_id,
+        [video_id, _EMBED_HOST.rstrip("/")],
     )
     # Give the embedded player time to negotiate and start buffering.
     time.sleep(3.0)
@@ -113,28 +121,86 @@ def _dismiss_consent(page) -> None:
             continue
 
 
-def create_session(keep_alive: bool = False) -> dict:
+# Default session lifetime requested for live previews (seconds). Plans cap the
+# max; if the requested value is rejected we retry without it (project default).
+LIVE_SESSION_TIMEOUT_S = 1800
+
+
+def create_session(keep_alive: bool = False, use_proxy: bool = False,
+                   timeout_s: int | None = None) -> dict:
     """
     Create a new Browserbase browser session.
 
     keep_alive=True keeps the session running after the automation client
     disconnects — required so a live-view URL stays valid for embedding.
+
+    use_proxy=True routes traffic through Browserbase's residential proxy pool.
+    This is needed for YouTube, which blocks playback from datacenter IPs with
+    a "Sign in to confirm you're not a bot" wall; a residential IP avoids it.
+
+    timeout_s extends the session's auto-release window so a live preview does
+    not stop after the (short) default. Falls back to the project default if the
+    plan rejects the requested value.
     """
     key, project = _creds()
+
+    def _post(body: dict) -> requests.Response:
+        return requests.post(
+            f"{BB_BASE}/sessions",
+            headers={"x-bb-api-key": key, "Content-Type": "application/json"},
+            json=body,
+            timeout=30,
+        )
+
     body: dict = {"projectId": project}
     if keep_alive:
         body["keepAlive"] = True
-    r = requests.post(
-        f"{BB_BASE}/sessions",
-        headers={
-            "x-bb-api-key": key,
-            "Content-Type": "application/json",
-        },
-        json=body,
-        timeout=30,
-    )
+    if use_proxy:
+        body["proxies"] = True
+    if timeout_s:
+        body["timeout"] = int(timeout_s)
+
+    r = _post(body)
+    # A too-large timeout for the plan returns 4xx — retry with project default.
+    if r.status_code >= 400 and "timeout" in body:
+        body.pop("timeout", None)
+        r = _post(body)
     r.raise_for_status()
     return r.json()
+
+
+def list_running_sessions() -> list[dict]:
+    """Return all currently RUNNING sessions for the project."""
+    key, _ = _creds()
+    try:
+        r = requests.get(
+            f"{BB_BASE}/sessions",
+            headers={"x-bb-api-key": key},
+            params={"status": "RUNNING"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json() or []
+    except Exception:
+        return []
+
+
+def release_running_sessions() -> int:
+    """
+    Release every RUNNING session for the project. Used to clear orphaned
+    keepAlive sessions (abandoned live previews) that otherwise exhaust the
+    plan's concurrency cap and cause 429s. Returns the number released.
+    """
+    n = 0
+    for s in list_running_sessions():
+        sid = s.get("id")
+        if sid:
+            try:
+                end_session(sid)
+                n += 1
+            except Exception:
+                pass
+    return n
 
 
 def end_session(session_id: str) -> None:
@@ -189,9 +255,15 @@ def start_live_session(url: str, viewport=(1280, 720),
 
     vid = youtube_video_id(url)
 
+    # Clear any orphaned keepAlive sessions from abandoned previews so we don't
+    # hit the plan's concurrency cap (Browserbase returns 429 otherwise).
+    release_running_sessions()
+
     # keepAlive so the session survives the Playwright disconnect below and
     # the live-view URL stays valid for embedding in the frontend.
-    session = create_session(keep_alive=True)
+    # Use a residential proxy for YouTube to dodge its datacenter-IP bot wall.
+    session = create_session(keep_alive=True, use_proxy=bool(vid),
+                             timeout_s=LIVE_SESSION_TIMEOUT_S)
     sid = session.get("id")
     connect_url = session.get("connectUrl")
     if not connect_url:
@@ -296,7 +368,7 @@ def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
     own_session = connect_url is None
     sid_to_release: str | None = None
     if own_session:
-        session = create_session()
+        session = create_session(use_proxy=bool(vid))
         sid_to_release = session.get("id")
         connect_url = session.get("connectUrl")
         if not connect_url:

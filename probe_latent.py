@@ -28,10 +28,23 @@ import torch
 from flow_extractor import process_video_to_features
 from world_model import CrowdWorldModel
 
+try:
+    from sklearn.linear_model import Ridge
+    from sklearn.model_selection import GroupKFold, cross_val_predict
+    from sklearn.metrics import r2_score
+    from sklearn.neural_network import MLPRegressor
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    _HAVE_SK = True
+except Exception:
+    _HAVE_SK = False
+
 WM_HIDDEN = int(os.environ.get("WM_HIDDEN_DIM", "512"))
 WM_LAYERS = int(os.environ.get("WM_N_LAYERS", "3"))
 WINDOW = 30
 MAX_FRAMES = int(os.environ.get("PROBE_MAX_FRAMES", "150"))
+CACHE_PATH = os.environ.get("FEATURE_CACHE", "data/features_cache_v2.pkl")
+N_SPLITS = int(os.environ.get("PROBE_CV_SPLITS", "3"))
 
 
 def _fit_linear_probe(Z: np.ndarray, y: np.ndarray) -> tuple[float, list[int]]:
@@ -48,6 +61,31 @@ def _fit_linear_probe(Z: np.ndarray, y: np.ndarray) -> tuple[float, list[int]]:
     return r2, [int(d) for d in top]
 
 
+def _heldout_r2(kind: str, Z: np.ndarray, y: np.ndarray,
+                groups: np.ndarray) -> float | None:
+    """
+    Sequence-grouped, out-of-fold R² (GroupKFold over whole videos -> no
+    temporal leakage). `kind` is "linear" (Ridge) or "mlp" (small MLP head).
+    Returns None when sklearn is missing or there are too few groups to split.
+    """
+    if not _HAVE_SK:
+        return None
+    n_groups = int(len(np.unique(groups)))
+    if n_groups < 2:
+        return None
+    n_splits = min(N_SPLITS, n_groups)
+    if kind == "linear":
+        model = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+    else:
+        model = make_pipeline(
+            StandardScaler(),
+            MLPRegressor(hidden_layer_sizes=(128, 64), activation="relu",
+                         alpha=1e-2, max_iter=1500, random_state=0))
+    pred = cross_val_predict(model, Z, y, groups=groups,
+                             cv=GroupKFold(n_splits=n_splits))
+    return max(0.0, float(r2_score(y, pred)))
+
+
 def _physics_targets(feats: np.ndarray) -> dict[str, np.ndarray]:
     """Per-frame measured physics from 256-dim features (matches detector)."""
     fx = feats[:, 0::4]
@@ -62,25 +100,48 @@ def _physics_targets(feats: np.ndarray) -> dict[str, np.ndarray]:
     }
 
 
-def main(video_dir: str = "data/videos",
-         out_path: str = "probe_results.json") -> dict:
-    wm = CrowdWorldModel(hidden_dim=WM_HIDDEN, n_layers=WM_LAYERS)
-    wm.load_state_dict(torch.load("models/world_model.pt", map_location="cpu"))
-    wm.eval()
-    print(f"[probe] world model loaded ({WM_HIDDEN}/{WM_LAYERS})")
+def _load_sequences(video_dir: str) -> list[np.ndarray]:
+    """
+    Per-video feature sequences. Reuses the cached features if present (fast,
+    and each cached sequence becomes one CV group), else extracts from videos.
+    """
+    if os.path.exists(CACHE_PATH):
+        import pickle
+        with open(CACHE_PATH, "rb") as f:
+            seqs = pickle.load(f)
+        print(f"[probe] loaded {len(seqs)} cached sequences from {CACHE_PATH}")
+        return [np.asarray(s, dtype=np.float32) for s in seqs]
 
-    Z_all, err_at_frame, targets_all = [], [], {k: [] for k in
-                                               ("crowd_velocity", "turbulence",
-                                                "backward_pressure",
-                                                "boundary_stress")}
-
+    seqs = []
     vids = [f for f in os.listdir(video_dir)
             if f.lower().endswith((".mp4", ".avi", ".mov"))]
-    print(f"[probe] {len(vids)} videos")
-
+    print(f"[probe] {len(vids)} videos (no cache -> extracting)")
     for v in vids:
         feats = process_video_to_features(os.path.join(video_dir, v),
                                           max_frames=MAX_FRAMES)
+        if len(feats) >= WINDOW + 2:
+            seqs.append(np.asarray(feats, dtype=np.float32))
+            print(f"  {v}: {len(feats)} frames")
+    return seqs
+
+
+def main(video_dir: str = "data/videos",
+         out_path: str = "probe_results.json") -> dict:
+    wm = CrowdWorldModel(hidden_dim=WM_HIDDEN, n_layers=WM_LAYERS)
+    # strict=False: shipped baselines may predate the feat_mean/feat_std buffers
+    # (left at identity -> standardize() is a no-op, matching how they trained).
+    wm.load_state_dict(torch.load("models/world_model.pt", map_location="cpu"),
+                       strict=False)
+    wm.eval()
+    print(f"[probe] world model loaded ({WM_HIDDEN}/{WM_LAYERS})")
+
+    concept_keys = ("crowd_velocity", "turbulence", "backward_pressure",
+                    "boundary_stress")
+    Z_all, err_at_frame, group_all = [], [], []
+    targets_all = {k: [] for k in concept_keys}
+
+    sequences = _load_sequences(video_dir)
+    for gi, feats in enumerate(sequences):
         if len(feats) < WINDOW + 2:
             continue
         with torch.no_grad():
@@ -89,6 +150,7 @@ def main(video_dir: str = "data/videos",
             z = wm.encoder(
                 wm.standardize(torch.FloatTensor(feats))).numpy()     # (T,64)
         Z_all.append(z)
+        group_all.append(np.full(len(z), gi, dtype=int))
         for k, y in _physics_targets(feats).items():
             targets_all[k].append(y)
 
@@ -100,14 +162,23 @@ def main(video_dir: str = "data/videos",
                 mu, _, zt, _, _ = wm(x)
                 errs[s + WINDOW] = float(torch.mean((mu - zt) ** 2))
         err_at_frame.append(errs)
-        print(f"  {v}: {len(feats)} frames")
+        print(f"  seq {gi}: {len(feats)} frames")
 
     Z = np.concatenate(Z_all, 0)
     err = np.concatenate(err_at_frame, 0)
+    groups = np.concatenate(group_all, 0)
     targets = {k: np.concatenate(v, 0) for k, v in targets_all.items()}
-    print(f"[probe] total frames: {len(Z)}")
+    n_groups = int(len(np.unique(groups)))
+    use_mlp = _HAVE_SK and n_groups >= 2
+    method = (f"mlp_heldout_groupkfold(k={min(N_SPLITS, n_groups)})"
+              if use_mlp else "linear_insample")
+    print(f"[probe] total frames: {len(Z)} across {n_groups} sequences "
+          f"| method: {method}")
 
     # ── known concepts ──────────────────────────────────────────────────────
+    # Headline R² is the honest held-out MLP probe (linear probes overfit far
+    # less but read the latent only linearly; the in-sample number is kept for
+    # transparency). Dimension attribution stays linear (it needs coefficients).
     concepts, used_dims = {}, set()
     descriptions = {
         "crowd_velocity": "Mean crowd movement speed",
@@ -116,11 +187,23 @@ def main(video_dir: str = "data/videos",
         "boundary_stress": "Compression at walls and barriers",
     }
     for name, y in targets.items():
-        r2, top = _fit_linear_probe(Z, y)
-        concepts[name] = {"r2": round(r2, 3), "top_dimensions": top,
-                          "description": descriptions[name]}
+        r2_insample, top = _fit_linear_probe(Z, y)
+        r2_mlp = _heldout_r2("mlp", Z, y, groups)
+        r2_lin_ho = _heldout_r2("linear", Z, y, groups)
+        headline = r2_mlp if (use_mlp and r2_mlp is not None) else r2_insample
+        concepts[name] = {
+            "r2": round(headline, 3),
+            "r2_mlp_heldout": round(r2_mlp, 3) if r2_mlp is not None else None,
+            "r2_linear_heldout": (round(r2_lin_ho, 3)
+                                  if r2_lin_ho is not None else None),
+            "r2_linear_insample": round(r2_insample, 3),
+            "top_dimensions": top,
+            "description": descriptions[name],
+        }
         used_dims.update(top)
-        print(f"  {name:18s} R²={r2:.3f} dims={top}")
+        print(f"  {name:18s} R²={headline:.3f} "
+              f"(mlp_ho={r2_mlp} lin_ho={r2_lin_ho} "
+              f"lin_insample={r2_insample:.3f}) dims={top}")
 
     # ── unknown dimensions ──────────────────────────────────────────────────
     # Dims not claimed by any known concept, ranked by how strongly they
@@ -165,6 +248,8 @@ def main(video_dir: str = "data/videos",
     result = {
         "latent_dim": int(Z.shape[1]),
         "n_frames": int(len(Z)),
+        "n_sequences": n_groups,
+        "probe_method": method,
         "concepts": concepts,
         "unknown": unknown,
         "table_md": table_md,

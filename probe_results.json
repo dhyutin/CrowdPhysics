@@ -1,65 +1,79 @@
 {
   "latent_dim": 64,
-  "n_frames": 1350,
+  "n_frames": 2435,
+  "n_sequences": 9,
+  "probe_method": "mlp_heldout_groupkfold(k=3)",
   "concepts": {
     "crowd_velocity": {
-      "r2": 0.92,
+      "r2": 0.539,
+      "r2_mlp_heldout": 0.539,
+      "r2_linear_heldout": 0.493,
+      "r2_linear_insample": 0.832,
       "top_dimensions": [
-        51,
-        40,
-        53,
-        60,
-        4
+        34,
+        49,
+        42,
+        52,
+        32
       ],
       "description": "Mean crowd movement speed"
     },
     "turbulence": {
-      "r2": 0.896,
+      "r2": 0.328,
+      "r2_mlp_heldout": 0.328,
+      "r2_linear_heldout": 0.18,
+      "r2_linear_insample": 0.782,
       "top_dimensions": [
-        53,
-        51,
-        4,
-        24,
-        13
+        34,
+        49,
+        17,
+        31,
+        9
       ],
       "description": "Chaotic motion intensity"
     },
     "backward_pressure": {
-      "r2": 0.917,
+      "r2": 0.564,
+      "r2_mlp_heldout": 0.564,
+      "r2_linear_heldout": 0.47,
+      "r2_linear_insample": 0.839,
       "top_dimensions": [
-        51,
-        40,
-        53,
-        60,
-        4
+        34,
+        49,
+        9,
+        52,
+        32
       ],
       "description": "Crowd moving against primary flow"
     },
     "boundary_stress": {
-      "r2": 0.986,
+      "r2": 0.259,
+      "r2_mlp_heldout": 0.259,
+      "r2_linear_heldout": 0.066,
+      "r2_linear_insample": 0.94,
       "top_dimensions": [
-        42,
+        52,
         34,
-        46,
-        9,
-        62
+        54,
+        49,
+        16
       ],
       "description": "Compression at walls and barriers"
     }
   },
   "unknown": {
     "dimensions": [
-      58,
-      0,
-      21,
-      22,
-      31
+      36,
+      45,
+      25,
+      26,
+      39
     ],
-    "separation_z_score": 0.91,
-    "high_surprise_activation": 0.065,
-    "calm_activation": -0.097,
-    "verdict": "0.91\u03c3 separation between pre-anomaly and calm frames on unexplained dimensions"
+    "separation_z_score": 1.56,
+    "high_surprise_activation": -0.557,
+    "calm_activation": -0.046,
+    "verdict": "1.56\u03c3 separation between pre-anomaly and calm frames on unexplained dimensions"
   },
-  "table_md": "| Concept | R\u00b2 | Key Dimensions | Status |\n|---|---|---|---|\n| Crowd Velocity | **0.92** | [51, 40, 53] | \u2705 Discovered |\n| Turbulence | **0.90** | [53, 51, 4] | \u2705 Discovered |\n| Backward Pressure | **0.92** | [51, 40, 53] | \u2705 Discovered |\n| Boundary Stress | **0.99** | [42, 34, 46] | \u2705 Discovered |\n| **UNKNOWN** | \u2014 | **[58, 0, 21, 22, 31]** | \u2b50 **0.91\u03c3 surprise separation** |",
+  "table_md": "| Concept | R\u00b2 | Key Dimensions | Status |\n|---|---|---|---|\n| Crowd Velocity | **0.54** | [34, 49, 42] | \u2705 Discovered |\n| Turbulence | **0.33** | [34, 49, 17] | \u2705 Discovered |\n| Backward Pressure | **0.56** | [34, 49, 9] | \u2705 Discovered |\n| Boundary Stress | **0.26** | [52, 34, 54] | \u2705 Discovered |\n| **UNKNOWN** | \u2014 | **[36, 45, 25, 26, 39]** | \u2b50 **1.56\u03c3 surprise separation** |",
   "computed": true
 }

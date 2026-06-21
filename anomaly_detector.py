@@ -251,7 +251,10 @@ def load_detector(world_model_path="models/world_model.pt",
 
     wm = CrowdWorldModel()
     if world_model_path and __import__("os").path.exists(world_model_path):
-        wm.load_state_dict(torch.load(world_model_path, map_location="cpu"))
+        # strict=False: pre-standardization checkpoints lack feat_mean/feat_std;
+        # leaving them at identity makes standardize() a no-op (raw features).
+        wm.load_state_dict(
+            torch.load(world_model_path, map_location="cpu"), strict=False)
         print(f"[detector] Loaded world model: {world_model_path}")
     else:
         print("[detector] No checkpoint found — using untrained model (demo mode)")

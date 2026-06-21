@@ -95,7 +95,10 @@ _wm_path = ROOT / "models" / "world_model.pt"
 _rl_path = ROOT / "models" / "rl_policy.pt"
 
 if _wm_path.exists():
-    _wm.load_state_dict(torch.load(_wm_path, map_location="cpu"))
+    # strict=False: the shipped baseline predates the feat_mean/feat_std buffers,
+    # so they stay at identity (0/1) -> standardize() is a no-op (raw features),
+    # which is exactly how this checkpoint was trained.
+    _wm.load_state_dict(torch.load(_wm_path, map_location="cpu"), strict=False)
     print(f"[startup] ✓ World model: {_wm_path}")
 else:
     print("[startup] ⚠  No world model checkpoint — demo mode")
