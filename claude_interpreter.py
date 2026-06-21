@@ -107,6 +107,83 @@ WATCH: [one metric or zone to re-assess in 60 seconds]"""
     return resp.content[0].text
 
 
+# ─── ROLE 1b: AGENT-DECIDED CRUSH RISK ───────────────────────────────────────
+
+def assess_crush_risk(physics_state, trend=None, forecast=None, venue=""):
+    """
+    Agent-decided crush risk for the monitoring UI.
+
+    Instead of a fixed/clipped formula, Claude REASONS over the live physics,
+    the minutes-ahead risk trend, and the world-model forecast to decide a
+    calibrated crush probability (0-100), how many seconds until it turns
+    critical, and a one-line justification + recommended action.
+
+    Returns {agent_risk, agent_lead_s, agent_reason, agent_recommendation,
+    agent_source} — or None if the model is unavailable, so the caller falls
+    back to the (de-saturated) world-model projection. Never raises.
+    """
+    try:
+        st    = physics_state.get("status", "SAFE")
+        score = float(physics_state.get("score", 0.0) or 0.0)
+        prob  = float(physics_state.get("probability", 0.0) or 0.0) * 100.0
+        turb  = float(physics_state.get("turbulence", 0.0) or 0.0)
+        back  = float(physics_state.get("backward_flow", 0.0) or 0.0)
+        bnd   = float(physics_state.get("boundary_stress", 0.0) or 0.0)
+        spd   = float(physics_state.get("mean_speed", 0.0) or 0.0)
+        slope = float((trend or {}).get("slope_per_min", 0.0) or 0.0)
+        wm_risk = float((forecast or {}).get("projected_risk", 0.0) or 0.0)
+        wm_lead = (forecast or {}).get("lead_time_s", None)
+        horizon = float((forecast or {}).get("horizon_s", 120.0) or 120.0)
+
+        lead_txt = (f", crosses critical in ~{float(wm_lead):.0f}s"
+                    if wm_lead is not None else ", no crush projected")
+        prompt = f"""LIVE CROWD READING — {venue or 'Unknown Venue'}
+Anomaly status: {st} | model score: {score:.2f} (alert at 2.5)
+Current crush probability (world model): {prob:.0f}%
+Turbulence: {turb:.4f} | Backward pressure waves: {back:.4f}
+Boundary stress: {bnd:.4f} | Mean crowd speed: {spd:.4f}
+Risk trend: {slope:+.1f} %/min
+World-model forecast over next {horizon:.0f}s: peak {wm_risk:.0f}%{lead_txt}
+
+Decide the crush risk for the next {horizon:.0f}s. Calibrate honestly:
+- 0-39 low · 40-65 elevated · 66-89 high/danger · 90-100 imminent crush.
+- Reserve 90+ for a genuine imminent crush (DANGER status with a rising trend
+  AND high turbulence/backward flow). Do NOT default to 99.
+- lead_s = seconds until risk becomes critical (>=66), or null if not projected.
+
+Output ONLY JSON:
+{{"crush_probability": <int 0-100>, "lead_s": <number or null>, "reasoning": "<=12 words why", "recommendation": "<=10 words what to do now"}}"""
+
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=200,
+            system=SYSTEM_CORE,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not m:
+            return None
+        data = json.loads(m.group(0))
+
+        risk = int(max(0, min(100, round(float(
+            data.get("crush_probability", wm_risk))))))
+        lead = data.get("lead_s", None)
+        try:
+            lead = None if lead is None else round(float(lead), 1)
+        except (TypeError, ValueError):
+            lead = None
+        return {
+            "agent_risk":           risk,
+            "agent_lead_s":         lead,
+            "agent_reason":         str(data.get("reasoning", ""))[:120],
+            "agent_recommendation": str(data.get("recommendation", ""))[:120],
+            "agent_source":         "claude",
+        }
+    except Exception:
+        return None
+
+
 # ─── ROLE 2: SCIENTIFIC INTERPRETER ──────────────────────────────────────────
 
 def name_discovered_physics(probe_results):

@@ -211,7 +211,8 @@ def flow_to_features(flow, grid_size=8):
 # ─── VISUALIZATION ────────────────────────────────────────────────────────────
 
 def render_pressure_field(flow, physics_state=None,
-                          grid_size=8, frame_shape=None):
+                          grid_size=8, frame_shape=None,
+                          show_risk_hud=True):
     """
     Render crowd dynamics as a CFD-style pressure field.
 
@@ -353,21 +354,23 @@ def render_pressure_field(flow, physics_state=None,
                 (12, 22), cv2.FONT_HERSHEY_SIMPLEX,
                 0.45, (148, 163, 184), 1, cv2.LINE_AA)
 
-    # Status
-    cv2.putText(canvas, f"STATUS: {status}",
-                (12, 42), cv2.FONT_HERSHEY_SIMPLEX,
-                0.5, status_line_color, 1, cv2.LINE_AA)
-
-    # Score
+    # Score (always shown — this is the model's anomaly, not the risk verdict)
     score_text = f"ANOMALY {score:.2f}"
     cv2.putText(canvas, score_text,
                 (W - 150, 22), cv2.FONT_HERSHEY_SIMPLEX,
                 0.42, (148, 163, 184), 1, cv2.LINE_AA)
 
-    prob = physics_state.get('probability', 0) if physics_state else 0
-    cv2.putText(canvas, f"CRUSH RISK {prob*100:.0f}%",
-                (W - 150, 42), cv2.FONT_HERSHEY_SIMPLEX,
-                0.42, status_line_color, 1, cv2.LINE_AA)
+    # STATUS + CRUSH RISK are the risk verdict. They can be suppressed (e.g. for
+    # the imagined/projected field) so a single source of truth — the agent's
+    # decided risk — is overlaid by the UI instead of a possibly-divergent one.
+    if show_risk_hud:
+        cv2.putText(canvas, f"STATUS: {status}",
+                    (12, 42), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, status_line_color, 1, cv2.LINE_AA)
+        prob = physics_state.get('probability', 0) if physics_state else 0
+        cv2.putText(canvas, f"CRUSH RISK {prob*100:.0f}%",
+                    (W - 150, 42), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.42, status_line_color, 1, cv2.LINE_AA)
 
     return canvas, pressure_grid
 

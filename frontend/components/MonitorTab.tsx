@@ -12,6 +12,7 @@ import {
   type Forecast,
   type Trend,
   type Hotspot,
+  hotspotSeverity,
   type CaptureSource,
   type LiveTick,
   type AgentTraceStep,
@@ -39,12 +40,30 @@ function youtubeId(url: string): string | null {
 function mergeProjection(
   trend: Trend | null | undefined,
   forecast: Forecast | null | undefined,
-  prevField?: string
+  prev?: Forecast | null
 ): Forecast | null {
   const f = forecast && !forecast.error ? forecast : null;
   const base = (trend ?? f) as Forecast | null;
-  if (!base) return null;
-  return { ...base, projected_field_b64: f?.projected_field_b64 ?? prevField };
+  if (!base) return prev ?? null;
+  // The agent's decision is sticky: it only arrives on forecast ticks, so carry
+  // it across the (more frequent) trend-only ticks. Prefer the freshest agent
+  // read on this forecast, else keep the previous one.
+  const agentSrc =
+    f?.agent_source ? f : prev?.agent_source ? prev : null;
+  const agent: Partial<Forecast> = agentSrc
+    ? {
+        agent_risk: agentSrc.agent_risk,
+        agent_lead_s: agentSrc.agent_lead_s,
+        agent_reason: agentSrc.agent_reason,
+        agent_recommendation: agentSrc.agent_recommendation,
+        agent_source: agentSrc.agent_source,
+      }
+    : {};
+  return {
+    ...base,
+    ...agent,
+    projected_field_b64: f?.projected_field_b64 ?? prev?.projected_field_b64,
+  };
 }
 
 const STATUS_META: Record<string, { badge: string; dot: string; label: string }> = {
@@ -177,6 +196,7 @@ export default function MonitorTab() {
   const [liveTicks, setLiveTicks]   = useState<TimelinePoint[]>([]);
   const [liveForecast, setLiveForecast] = useState<Forecast | null>(null);
   const [liveHotspot, setLiveHotspot] = useState<Hotspot | null>(null);
+  const [markRegions, setMarkRegions] = useState(true);
   const [liveFrame, setLiveFrame]   = useState<string | null>(null);
   const [film, setFilm]             = useState<FilmFrame[]>([]);
   const [liveStatus, setLiveStatus] = useState("CALIBRATING");
@@ -371,7 +391,7 @@ export default function MonitorTab() {
           // latest imagined field), so the right side keeps moving live.
           if (ev.trend || (ev.forecast && !ev.forecast.error)) {
             setLiveForecast((prev) =>
-              mergeProjection(ev.trend, ev.forecast, prev?.projected_field_b64) ?? prev
+              mergeProjection(ev.trend, ev.forecast, prev) ?? prev
             );
           }
           if (ev.hotspot) setLiveHotspot(ev.hotspot);
@@ -420,7 +440,7 @@ export default function MonitorTab() {
             source: capturedSource,
           });
           setLiveForecast((prev) =>
-            mergeProjection(ev.trend, ev.forecast, prev?.projected_field_b64) ?? prev
+            mergeProjection(ev.trend, ev.forecast, prev) ?? prev
           );
           if (ev.hotspot) setLiveHotspot(ev.hotspot);
           if (ev.counterfactual && !ev.counterfactual.error)
@@ -960,7 +980,14 @@ export default function MonitorTab() {
             )}
 
             {/* Synchronized replay — real frames ↔ pressure field, slow + scrubbable */}
-            {film.length > 0 && <FilmPlayer film={film} live={streaming} />}
+            {film.length > 0 && (
+              <FilmPlayer
+                film={film}
+                live={streaming}
+                markRegions={markRegions}
+                onToggleMarkRegions={() => setMarkRegions((v) => !v)}
+              />
+            )}
 
             {/* Flow-statistics field (animated) — fallback when no film yet */}
             {film.length === 0 && (
@@ -976,9 +1003,9 @@ export default function MonitorTab() {
                     className="block max-h-[440px] max-w-full w-auto rounded"
                   />
 
-                  {liveHotspot &&
-                    (liveStatus === "DANGER" || liveStatus === "WARNING") && (() => {
-                    const danger = liveStatus === "DANGER";
+                  {markRegions && liveHotspot &&
+                    hotspotSeverity(liveHotspot, liveStatus) !== "calm" && (() => {
+                    const danger = hotspotSeverity(liveHotspot, liveStatus) === "critical";
                     const ring = danger ? "#F85149" : "#D29922";
                     const op = 0.5 + 0.45 * Math.min(1, liveHotspot.intensity);
                     return (
@@ -1007,7 +1034,7 @@ export default function MonitorTab() {
                         <div className="absolute left-1/2 -translate-x-1/2 -top-6 whitespace-nowrap">
                           <div className={danger ? "badge-danger" : "badge-warning"}>
                             <span className={danger ? "dot-danger" : "dot-warning"} />
-                            {danger ? "DANGER" : "RISK"} · {liveScore.toFixed(1)}σ
+                            {danger ? "VERY DANGEROUS" : "SLIGHTLY RISKY"} · {liveScore.toFixed(1)}σ
                           </div>
                         </div>
                       </div>
@@ -1104,8 +1131,7 @@ export default function MonitorTab() {
                 Minutes-ahead trend curve + world-model imagined field. */}
             {(() => {
               const fc = result
-                ? mergeProjection(result.trend, result.forecast,
-                                  liveForecast?.projected_field_b64)
+                ? mergeProjection(result.trend, result.forecast, liveForecast)
                 : liveForecast;
               return fc && !fc.error ? <ForecastPanel forecast={fc} /> : null;
             })()}

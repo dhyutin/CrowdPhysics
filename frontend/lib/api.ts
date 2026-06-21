@@ -337,14 +337,39 @@ export interface Forecast {
   projected_risk?: number;
   projected_field_b64?: string;
   error?: string;
+  // Agent-decided crush risk (Claude reasons over physics + trend + forecast).
+  // When present the UI shows this calibrated number instead of the raw
+  // world-model projection.
+  agent_risk?: number;
+  agent_lead_s?: number | null;
+  agent_reason?: string;
+  agent_recommendation?: string;
+  agent_source?: "claude";
 }
 
 // Normalized region of danger on the frame (x,y,r in [0,1]).
+// Severity grade for a localized danger region.
+export type DangerSeverity = "calm" | "elevated" | "critical";
+
 export interface Hotspot {
   x: number;
   y: number;
   r: number;
   intensity: number;
+  severity?: DangerSeverity; // "elevated" = slightly risky, "critical" = very dangerous
+}
+
+// Resolve a region's severity, falling back to the frame status for older
+// payloads that don't carry an explicit grade.
+export function hotspotSeverity(
+  h?: Hotspot | null,
+  status?: string
+): DangerSeverity {
+  if (!h) return "calm";
+  if (h.severity) return h.severity;
+  if (status === "DANGER") return "critical";
+  if (status === "WARNING") return "elevated";
+  return "calm";
 }
 
 // Minutes-ahead statistical trend projection (NOT the world-model rollout).
@@ -481,6 +506,16 @@ export interface VenueLayout {
   decor?: DecorProp[];
 }
 
+// Fruin Level-of-Service breakdown of the settled crowd (A = free, F = crush).
+export type LosGrade = "A" | "B" | "C" | "D" | "E" | "F";
+export interface LevelOfService {
+  max_density: number;   // peak people/m²
+  mean_density: number;  // over occupied floor area
+  worst_los: LosGrade;
+  distribution: Record<LosGrade, number>; // fraction of occupied area per grade
+  occupied_cells: number;
+}
+
 export interface SimulateResult {
   frame_b64: string;
   metrics: string;
@@ -489,6 +524,7 @@ export interface SimulateResult {
   safe_capacity: number;
   peak_pressure: number;
   n_exits?: number;
+  level_of_service?: LevelOfService;
   venue_name?: string;
   layout?: VenueLayout;
 }
@@ -519,6 +555,9 @@ export interface ScenarioMetrics {
   safe_capacity: number;
   crush_prob: number;
   n_exits: number;
+  peak_density?: number;
+  worst_los?: LosGrade;
+  los_distribution?: Record<LosGrade, number>;
 }
 
 export interface Scenario {

@@ -6,6 +6,13 @@ function pressureColor(p: number) {
   return p > 6 ? "text-crimson" : p > 3 ? "text-amber" : "text-emerald";
 }
 
+// Fruin LOS color: A/B comfortable, C/D busy, E/F crush risk.
+function losColor(los?: string) {
+  if (los === "E" || los === "F") return "text-crimson";
+  if (los === "C" || los === "D") return "text-amber";
+  return "text-emerald";
+}
+
 export default function ScenarioCompare({
   scenarios,
   selectedId,
@@ -62,6 +69,14 @@ export default function ScenarioCompare({
                 <p className="kpi-label">Exits</p>
                 <p className="font-mono text-[11px] text-text2">{m.n_exits}</p>
               </div>
+              {m.worst_los && (
+                <div className="col-span-2">
+                  <p className="kpi-label">Density · LOS</p>
+                  <p className={`font-mono text-[11px] font-bold ${losColor(m.worst_los)}`}>
+                    {m.peak_density != null ? `${m.peak_density.toFixed(1)}/m²` : "—"} · {m.worst_los}
+                  </p>
+                </div>
+              )}
             </div>
 
             <p className="font-mono text-[9px] text-text3 leading-tight line-clamp-2">

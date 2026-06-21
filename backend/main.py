@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,7 @@ from dyna_trainer import DynaTrainer
 from anomaly_detector import CrowdPhysicsDetector
 from claude_interpreter import (
     interpret_live,
+    assess_crush_risk,
     name_discovered_physics,
     explain_rl_decision,
     generate_safety_report,
@@ -277,7 +279,12 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
         points, worst, worst_i = [], -1.0, 0
         for i, f in enumerate(dec):
             ratio = _intensity(f) / p0
-            risk = float(np.clip(base * ratio, 1.0, 99.0))
+            # Smooth saturating map instead of a hard clip-at-99, so the number
+            # genuinely VARIES with the projected intensity (e.g. 71/84/93%)
+            # rather than pinning to a fixed ceiling. Diminishing returns toward
+            # 100 — crosses the 66% "critical" line when base*ratio ≳ 59.
+            raw = base * ratio
+            risk = float(np.clip(100.0 * (1.0 - np.exp(-raw / 55.0)), 1.0, 97.0))
             points.append({"t": round((i + 1) * dt_eff, 1),
                            "risk": round(risk, 1)})
             if risk > worst:
@@ -313,8 +320,11 @@ def _forecast_future(feat_history: list[np.ndarray], current_prob: float,
                           "turbulence": float(np.abs(wf[:, :, 3]).mean()),
                           "backward_flow": 0.0, "boundary_stress": 0.0,
                           "mean_speed": float(np.abs(wf[:, :, 2]).mean())}
+            # Suppress the baked STATUS/CRUSH text — the UI overlays the unified
+            # (agent-decided) risk so the field label always matches the headline.
             field, _ = render_pressure_field(flow_big, proj_state,
-                                             frame_shape=(480, 640))
+                                             frame_shape=(480, 640),
+                                             show_risk_hud=False)
             result["projected_field_b64"] = _frame_to_b64(field)
 
         return result
@@ -537,6 +547,35 @@ def _danger_hotspot(flow: np.ndarray, grid_size: int = 8,
     return hot
 
 
+def _danger_severity(status: str, score: float, intensity: float) -> str:
+    """
+    Grade how dangerous a localized region is by combining the GLOBAL anomaly
+    level (σ status/score) with how CONCENTRATED the pressure is (intensity).
+
+    Returns:
+      "critical" — very dangerous (mark it red, pulsing)
+      "elevated" — slightly risky (mark it amber)
+      "calm"     — nothing worth marking
+
+    A tightly concentrated build-up can escalate to critical even when the
+    global status is only WARNING, so the operator sees the worst spot clearly.
+    """
+    if status == "DANGER" or (score >= 4.0 and intensity >= 0.55):
+        return "critical"
+    if status == "WARNING" or (score >= 2.5 and intensity >= 0.35):
+        return "elevated"
+    return "calm"
+
+
+def _attach_severity(hot: dict | None, physics: dict | None) -> dict | None:
+    """Tag a danger region with a severity grade from the frame's physics."""
+    if hot is None:
+        return None
+    st = (physics or {}).get("status", "SAFE")
+    sc = float((physics or {}).get("score", 0.0) or 0.0)
+    return {**hot, "severity": _danger_severity(st, sc, hot.get("intensity", 0.0))}
+
+
 def _calibrate(frames: list[np.ndarray]) -> int:
     """
     Establish the anomaly baseline on the opening (assumed calm) frames so the
@@ -723,7 +762,7 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
         "trend":           trend,
         "counterfactual":  counterfactual,
         "alert":           alert,
-        "hotspot":         (_danger_hotspot(peak_flow)
+        "hotspot":         (_attach_severity(_danger_hotspot(peak_flow), peak_physics)
                             if peak_flow is not None else None),
         "agent_trace":     trace,
     }
@@ -735,6 +774,9 @@ def _analyze_frames(frames: list[np.ndarray], fps: float,
 # and how often within that to also render the (heavier) imagined field.
 FORECAST_EVERY = int(os.environ.get("STREAM_FORECAST_EVERY", "5"))
 FIELD_EVERY_FORECASTS = 3
+# How often (in frames) to let the LLM agent re-decide the crush risk during
+# elevated risk. Runs in the background, so this only bounds Claude call rate.
+AGENT_ASSESS_EVERY = int(os.environ.get("STREAM_AGENT_ASSESS_EVERY", "36"))
 # Wall-clock pacing so the stream ticks like a live clock rather than as fast as
 # the CPU can churn. Capped so fast machines still look "live", not instant.
 STREAM_PACE_FPS = float(os.environ.get("STREAM_PACE_FPS", "12"))
@@ -786,6 +828,31 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
         GIF_MAX_FRAMES = 80
         target_dt = 1.0 / max(STREAM_PACE_FPS, 1.0)
 
+        # Agent-decided crush risk runs in a BACKGROUND thread so the live clock
+        # never stalls on a Claude call. The loop reads the latest cached result.
+        agent_state = {"value": None, "busy": False, "last_step": -10_000}
+        agent_lock = threading.Lock()
+
+        def _spawn_agent(physics_snap, trend_snap, forecast_snap):
+            with agent_lock:
+                if agent_state["busy"]:
+                    return
+                agent_state["busy"] = True
+
+            def _work():
+                res = None
+                try:
+                    res = assess_crush_risk(physics_snap, trend_snap,
+                                            forecast_snap, venue)
+                except Exception:
+                    res = None
+                with agent_lock:
+                    if res:
+                        agent_state["value"] = res
+                    agent_state["busy"] = False
+
+            threading.Thread(target=_work, daemon=True).start()
+
         # ── DETECTION PASS (streamed) ─────────────────────────────────────────
         prev_frame = frames[0]
         for step, curr in enumerate(frames[1:]):
@@ -831,9 +898,10 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
                 tick["field_b64"] = field_b64
 
             # Region of danger — recomputed and smoothed every frame so the
-            # live marker tracks the building pressure continuously.
+            # live marker tracks the building pressure continuously, then graded
+            # (slightly risky vs very dangerous) from this frame's physics.
             hot_ema = _danger_hotspot(flow, prev=hot_ema)
-            tick["hotspot"] = hot_ema
+            tick["hotspot"] = _attach_severity(hot_ema, physics)
 
             if physics["status"] != "CALIBRATING":
                 # Minutes-ahead trend is cheap → refresh it every frame so the
@@ -851,6 +919,18 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
                                           physics.get("probability", 0.0), fps,
                                           render_field=render_field)
                     if fc and not fc.get("error"):
+                        # Let the AGENT decide the headline crush risk: kick off a
+                        # non-blocking assessment on a slow cadence (any non-
+                        # calibrating status, so the number is always agent-sourced)
+                        # and attach the latest cached agent read.
+                        if step - agent_state["last_step"] >= AGENT_ASSESS_EVERY:
+                            agent_state["last_step"] = step
+                            _spawn_agent({k: v for k, v in physics.items()
+                                          if k != "z_latent"}, tr, fc)
+                        with agent_lock:
+                            ar = agent_state["value"]
+                        if ar:
+                            fc = {**fc, **ar}
                         last_forecast = fc
                         tick["forecast"] = fc
 
@@ -893,6 +973,21 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
         except Exception:
             pass
 
+        # Let the agent decide the final headline risk too (synchronous here —
+        # the live pass is done, so a one-off Claude call is fine). Falls back to
+        # the latest cached live agent read, else the world-model projection.
+        if final_forecast and peak_physics:
+            try:
+                fa = assess_crush_risk(
+                    {k: v for k, v in (peak_physics or {}).items() if k != "z_latent"},
+                    _project_trend(timeline), final_forecast, venue)
+            except Exception:
+                fa = None
+            with agent_lock:
+                fa = fa or agent_state["value"]
+            if fa:
+                final_forecast = {**final_forecast, **fa}
+
         # ── COUNTERFACTUAL: world-model proof that the fix lowers risk ───────
         counterfactual = None
         iv = (peak_physics or {}).get("intervention")
@@ -932,7 +1027,7 @@ def _analyze_frames_stream(frames: list[np.ndarray], fps: float, venue: str):
             "forecast":        final_forecast,
             "trend":           _project_trend(timeline),
             "counterfactual":  counterfactual,
-            "hotspot":         (_danger_hotspot(peak_flow)
+            "hotspot":         (_attach_severity(_danger_hotspot(peak_flow), peak_physics)
                                 if peak_flow is not None else None),
             "peak_frame_b64":  (_frame_to_b64(peak_frame)
                                 if peak_frame is not None else None),
@@ -1334,12 +1429,14 @@ def _run_venue_simulation(config: VenueConfig, capacity: int,
     danger   = sim.get_danger_zones(threshold=3.0)
     safe_cap = sim.estimate_safe_capacity(capacity)
     peak_p   = float(sim.pressure.max())
+    los      = sim.level_of_service()
 
     metrics = (
         f"SIMULATION — {config.name}\n"
         f"Capacity requested : {capacity:,}\n"
         f"Safe capacity      : {safe_cap:,}\n"
         f"Peak pressure      : {peak_p:.1f} / 12.0\n"
+        f"Peak density       : {los['max_density']:.1f} ppl/m²  (LOS {los['worst_los']})\n"
         f"Danger zones       : {len(danger)}\n"
         f"Exits              : {n_exits}\n"
         + ("⚠  HIGH RISK" if danger else "✓  Layout safe")
@@ -1351,6 +1448,7 @@ def _run_venue_simulation(config: VenueConfig, capacity: int,
         "safe_capacity":  safe_cap,
         "danger_zones":   danger[:5],
         "n_exits":        n_exits,
+        "level_of_service": los,
     }
     venue_info = {"name": config.name, "capacity": capacity, "exits": n_exits}
     if layout:
@@ -1370,6 +1468,7 @@ def _run_venue_simulation(config: VenueConfig, capacity: int,
         "safe_capacity": safe_cap,
         "peak_pressure": peak_p,
         "n_exits":       n_exits,
+        "level_of_service": los,
         "venue_name":    config.name,
     }
     if layout is not None:
@@ -1825,6 +1924,7 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
         safe_cap = sim.estimate_safe_capacity(final_capacity)
         peak_p   = float(sim.pressure.max())
         crush    = _scenario_crush_prob(sim)
+        los      = sim.level_of_service()
 
         metrics = {
             "peak_pressure":  round(peak_p, 2),
@@ -1832,6 +1932,9 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
             "safe_capacity":  safe_cap,
             "crush_prob":     round(crush, 3),
             "n_exits":        _n_exits(config),
+            "peak_density":   los["max_density"],
+            "worst_los":      los["worst_los"],
+            "los_distribution": los["distribution"],
         }
         score = (min(peak_p, 12.0) / 12.0 * 0.40
                  + min(len(danger), 10) / 10.0 * 0.30

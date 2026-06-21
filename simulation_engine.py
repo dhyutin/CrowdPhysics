@@ -59,6 +59,41 @@ DEFAULT_VENUE = VenueConfig(
 )
 
 
+# ─── PHYSICS CONSTANTS ────────────────────────────────────────────────────────
+
+P_JAM = 12.0          # pressure at which a cell is fully jammed (matches clip max)
+MIN_MOBILITY = 0.15   # residual flow speed in a fully jammed cell (never zero)
+MAX_DENSITY = 5.0     # people/m² at jam pressure (crush regime) for LOS mapping
+
+# Fruin-style Level-of-Service thresholds for standing/assembly areas, in
+# people/m². A = free, F = crush risk. (type, upper-bound density.)
+_LOS_BANDS = [("A", 0.43), ("B", 0.72), ("C", 1.08),
+              ("D", 1.54), ("E", 2.17)]  # anything above E is "F"
+
+
+def arrival_multiplier(step: int, n_steps: int, profile: str = "surge") -> float:
+    """
+    Time-varying inflow scale for the doors-open period.
+
+    Real crowds don't arrive at a constant rate: there's a rush when doors
+    open that overshoots, then settles to a steady "full house". A flat profile
+    ("steady") reproduces the original constant-injection behavior.
+
+    Returns a multiplier applied to the per-step injection rate. The profile
+    plateaus at 1.0 (not draining) so the settled field still represents peak
+    occupancy — the worst case for danger-zone analysis.
+    """
+    if profile == "steady" or n_steps <= 1:
+        return 1.0
+    frac = step / (n_steps - 1)
+    # doors-open surge: quick rise → brief overshoot → settle to steady full house
+    if frac < 0.15:
+        return 0.30 + (frac / 0.15) * 1.40          # 0.30 → 1.70 (rush builds)
+    if frac < 0.35:
+        return 1.70 - ((frac - 0.15) / 0.20) * 0.70  # 1.70 → 1.00 (settles)
+    return 1.0                                       # full-house plateau
+
+
 # ─── SIMULATOR ────────────────────────────────────────────────────────────────
 
 class CrowdSimulator:
@@ -134,7 +169,8 @@ class CrowdSimulator:
     # ── SIMULATION LOOP ───────────────────────────────────────────────────────
 
     def run_steps(self, n_steps: int = 60,
-                  crowd_density: float = 0.6) -> List[np.ndarray]:
+                  crowd_density: float = 0.6,
+                  arrival: str = "surge") -> List[np.ndarray]:
         """
         Run n_steps of crowd fluid simulation.
 
@@ -143,15 +179,16 @@ class CrowdSimulator:
 
         crowd_density: 0–1, scales injection rate at entry points.
         Higher = more people arriving per step.
+        arrival: "surge" (doors-open rush → full house) or "steady" (constant).
         """
         snapshots = []
-        sink_set = set(self.sinks)
 
-        for _ in range(n_steps):
-            # ── Inject crowd at entries ────────────────────────────────────
+        for step in range(n_steps):
+            # ── Inject crowd at entries (time-varying arrival) ─────────────
+            rate = crowd_density * 0.25 * arrival_multiplier(step, n_steps, arrival)
             for sy, sx in self.sources:
                 if not self.walls[sy, sx]:
-                    self.pressure[sy, sx] += crowd_density * 0.25
+                    self.pressure[sy, sx] += rate
 
             # ── Diffusion (vectorised) ────────────────────────────────────
             # Pad with zero boundary to handle edges cleanly
@@ -178,14 +215,16 @@ class CrowdSimulator:
                 if 0 <= sy < self.grid and 0 <= sx < self.grid:
                     new_pressure[sy, sx] *= 0.35
 
-            # ── Velocity from pressure gradient ───────────────────────────
-            # vy: higher pressure above → push downward (positive y = down)
+            # ── Velocity from pressure gradient × density-dependent speed ──
+            # Fundamental diagram: walking speed falls as a cell packs (a jammed
+            # cell barely moves) so congestion is self-reinforcing.
+            mobility = np.clip(1.0 - new_pressure / P_JAM, MIN_MOBILITY, 1.0)
             self.velocity_y[1:-1, :] = (
                 new_pressure[:-2, :] - new_pressure[2:, :]
-            ) * 0.3
+            ) * 0.3 * mobility[1:-1, :]
             self.velocity_x[:, 1:-1] = (
                 new_pressure[:, :-2] - new_pressure[:, 2:]
-            ) * 0.3
+            ) * 0.3 * mobility[:, 1:-1]
             self.velocity_x[self.walls] = 0.0
             self.velocity_y[self.walls] = 0.0
 
@@ -196,7 +235,8 @@ class CrowdSimulator:
 
     def run_steps_record(self, n_steps: int = 80,
                          crowd_density: float = 0.6,
-                         stride: int = 2) -> Dict:
+                         stride: int = 2,
+                         arrival: str = "surge") -> Dict:
         """
         Run the simulation and record a downsampled timeline of the velocity
         and pressure fields, suitable for driving an agent-based 3D render in
@@ -220,10 +260,11 @@ class CrowdSimulator:
         p_max = 1e-6
 
         for step in range(n_steps):
-            # ── Inject crowd at entries ────────────────────────────────────
+            # ── Inject crowd at entries (time-varying arrival) ─────────────
+            rate = crowd_density * 0.25 * arrival_multiplier(step, n_steps, arrival)
             for sy, sx in self.sources:
                 if not self.walls[sy, sx]:
-                    self.pressure[sy, sx] += crowd_density * 0.25
+                    self.pressure[sy, sx] += rate
 
             # ── Diffusion ──────────────────────────────────────────────────
             p = self.pressure
@@ -240,11 +281,13 @@ class CrowdSimulator:
                 if 0 <= sy < self.grid and 0 <= sx < self.grid:
                     new_pressure[sy, sx] *= 0.35
 
-            # ── Velocity from pressure gradient ────────────────────────────
+            # ── Velocity from pressure gradient × density-dependent speed ──
+            # Fundamental diagram: dense cells flow slower, so jams persist.
+            mobility = np.clip(1.0 - new_pressure / P_JAM, MIN_MOBILITY, 1.0)
             self.velocity_y[1:-1, :] = (
-                new_pressure[:-2, :] - new_pressure[2:, :]) * 0.3
+                new_pressure[:-2, :] - new_pressure[2:, :]) * 0.3 * mobility[1:-1, :]
             self.velocity_x[:, 1:-1] = (
-                new_pressure[:, :-2] - new_pressure[:, 2:]) * 0.3
+                new_pressure[:, :-2] - new_pressure[:, 2:]) * 0.3 * mobility[:, 1:-1]
             self.velocity_x[self.walls] = 0.0
             self.velocity_y[self.walls] = 0.0
 
@@ -299,6 +342,64 @@ class CrowdSimulator:
         space      = 1.0 - wall_frac
         # Apply safety margin
         return int(base_capacity * bottleneck * space * 0.82)
+
+    def level_of_service(self) -> Dict:
+        """
+        Classify the settled crowd by Fruin Level-of-Service (A–F).
+
+        Maps the abstract pressure field to a people/m² density (jam pressure ≈
+        crush density) and buckets each occupied open cell into a Fruin band.
+        LOS A = free movement, F = crush risk. Returns the density distribution
+        so the planner can report how much of the floor is in each comfort band.
+
+        Returns:
+            {
+              "max_density":    float,   # peak people/m²
+              "mean_density":   float,   # over occupied area
+              "worst_los":      "A".."F",
+              "distribution":   {"A": frac, ... "F": frac},  # of occupied area
+              "occupied_cells": int,
+            }
+        """
+        open_mask = ~self.walls
+        density = np.where(open_mask, (self.pressure / P_JAM) * MAX_DENSITY, 0.0)
+
+        occupied = open_mask & (density > 0.05)
+        n_occ = int(occupied.sum())
+        dist = {g: 0.0 for g, _ in _LOS_BANDS}
+        dist["F"] = 0.0
+        if n_occ == 0:
+            return {"max_density": 0.0, "mean_density": 0.0, "worst_los": "A",
+                    "distribution": dist, "occupied_cells": 0}
+
+        occ_density = density[occupied]
+        counts = {g: 0 for g in dist}
+        for d in occ_density:
+            grade = "F"
+            for g, upper in _LOS_BANDS:
+                if d <= upper:
+                    grade = g
+                    break
+            counts[grade] += 1
+
+        for g in dist:
+            dist[g] = round(counts[g] / n_occ, 3)
+
+        # Worst LOS that covers a non-trivial slice of the floor (≥1% of area),
+        # so a single noisy cell doesn't dominate the verdict.
+        order = ["A", "B", "C", "D", "E", "F"]
+        worst = "A"
+        for g in order:
+            if dist[g] >= 0.01:
+                worst = g
+
+        return {
+            "max_density":    round(float(occ_density.max()), 2),
+            "mean_density":   round(float(occ_density.mean()), 2),
+            "worst_los":      worst,
+            "distribution":   dist,
+            "occupied_cells": n_occ,
+        }
 
     def to_features(self) -> np.ndarray:
         """

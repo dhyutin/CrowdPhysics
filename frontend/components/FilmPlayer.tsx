@@ -1,7 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Hotspot } from "@/lib/api";
+import { hotspotSeverity, type DangerSeverity, type Hotspot } from "@/lib/api";
+
+// Severity → marker styling. "elevated" = slightly risky, "critical" = very dangerous.
+const SEV_META: Record<
+  Exclude<DangerSeverity, "calm">,
+  { color: string; label: string; pulse: boolean; glow: string; fill: string }
+> = {
+  critical: {
+    color: "#F85149", label: "VERY DANGEROUS", pulse: true,
+    glow: "rgba(248,81,73,0.4)", fill: "rgba(248,81,73,0.22)",
+  },
+  elevated: {
+    color: "#D29922", label: "SLIGHTLY RISKY", pulse: false,
+    glow: "rgba(210,153,34,0.28)", fill: "rgba(210,153,34,0.16)",
+  },
+};
 
 export interface FilmFrame {
   t: number;
@@ -24,9 +39,13 @@ const SPEEDS = [2, 4, 8]; // fps options; 4 = "slow" default
 export default function FilmPlayer({
   film,
   live,
+  markRegions = true,
+  onToggleMarkRegions,
 }: {
   film: FilmFrame[];
   live: boolean;
+  markRegions?: boolean;
+  onToggleMarkRegions?: () => void;
 }) {
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(true);
@@ -58,11 +77,10 @@ export default function FilmPlayer({
 
   if (n === 0) return null;
   const cur = film[Math.min(idx, n - 1)];
-  const danger = cur.status === "DANGER";
-  const warn = cur.status === "WARNING";
   const meta = META[cur.status] ?? META.CALIBRATING;
-  const showMark = (danger || warn) && cur.hotspot;
-  const ring = danger ? "#F85149" : "#D29922";
+  const sev = hotspotSeverity(cur.hotspot, cur.status);
+  const sevMeta = sev === "calm" ? null : SEV_META[sev];
+  const showMark = markRegions && cur.hotspot != null && sevMeta != null;
 
   return (
     <div className="card flex flex-col animate-fade-in">
@@ -71,13 +89,29 @@ export default function FilmPlayer({
           {live && <span className="dot-live" />}
           Synchronized Replay · Frame ↔ Physics
         </p>
-        <span
-          className={`badge text-[9px] px-1.5 py-0.5 ${
-            live ? "badge-danger" : "badge-teal"
-          }`}
-        >
-          {live ? "LIVE" : "REPLAY"}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {onToggleMarkRegions && (
+            <button
+              type="button"
+              onClick={onToggleMarkRegions}
+              title="Mark the regions in the frame where danger is building"
+              className={`font-mono text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
+                markRegions
+                  ? "bg-crimson/15 text-crimson border-crimson/30"
+                  : "text-text3 border-border hover:text-text2"
+              }`}
+            >
+              {markRegions ? "◉ Danger regions" : "○ Danger regions"}
+            </button>
+          )}
+          <span
+            className={`badge text-[9px] px-1.5 py-0.5 ${
+              live ? "badge-danger" : "badge-teal"
+            }`}
+          >
+            {live ? "LIVE" : "REPLAY"}
+          </span>
+        </div>
       </div>
 
       <div className="p-3 flex flex-col gap-3">
@@ -91,7 +125,7 @@ export default function FilmPlayer({
                 alt="Analyzed frame"
                 className="block max-h-[260px] max-w-full w-auto"
               />
-              {showMark && cur.hotspot && (
+              {showMark && cur.hotspot && sevMeta && (
                 <div
                   className="pointer-events-none absolute z-10 transition-all duration-300 ease-out"
                   style={{
@@ -103,17 +137,25 @@ export default function FilmPlayer({
                   }}
                 >
                   <div
-                    className={`aspect-square rounded-full ${danger ? "animate-pulse" : ""}`}
+                    className={`aspect-square rounded-full ${sevMeta.pulse ? "animate-pulse" : ""}`}
                     style={{
-                      border: `2px solid ${ring}`,
-                      boxShadow: `0 0 18px ${ring}, inset 0 0 22px ${danger ? "rgba(248,81,73,0.4)" : "rgba(210,153,34,0.28)"}`,
-                      background: `radial-gradient(circle, ${danger ? "rgba(248,81,73,0.22)" : "rgba(210,153,34,0.16)"} 0%, transparent 70%)`,
+                      border: `2px solid ${sevMeta.color}`,
+                      boxShadow: `0 0 18px ${sevMeta.color}, inset 0 0 22px ${sevMeta.glow}`,
+                      background: `radial-gradient(circle, ${sevMeta.fill} 0%, transparent 70%)`,
                     }}
                   />
                   <div
                     className="absolute top-1/2 left-1/2 w-1.5 h-1.5 rounded-full -translate-x-1/2 -translate-y-1/2"
-                    style={{ background: ring }}
+                    style={{ background: sevMeta.color }}
                   />
+                  <div className="absolute left-1/2 -translate-x-1/2 -top-5 whitespace-nowrap">
+                    <span
+                      className="font-mono text-[8px] font-bold px-1.5 py-0.5 rounded"
+                      style={{ background: `${sevMeta.color}22`, color: sevMeta.color, border: `1px solid ${sevMeta.color}55` }}
+                    >
+                      {sevMeta.label}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>

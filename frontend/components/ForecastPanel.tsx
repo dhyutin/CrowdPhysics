@@ -85,13 +85,52 @@ function getUrgency(
 
 export default function ForecastPanel({ forecast }: { forecast: Forecast }) {
   if (!forecast || forecast.error) return null;
-  const status = forecast.projected_status ?? "SAFE";
-  const lead = forecast.lead_time_s;
+
+  // When the agent (Claude) has decided the risk, it is authoritative: it
+  // drives the headline number, lead time, and banner. Otherwise fall back to
+  // the (de-saturated) world-model projection.
+  const hasAgent =
+    forecast.agent_source === "claude" && forecast.agent_risk != null;
+  const riskNum = hasAgent
+    ? (forecast.agent_risk as number)
+    : Math.round(forecast.projected_risk ?? 0);
+  const lead = hasAgent ? forecast.agent_lead_s : forecast.lead_time_s;
+  const status = hasAgent
+    ? riskNum >= 66 ? "DANGER" : riskNum >= 40 ? "WARNING" : "SAFE"
+    : forecast.projected_status ?? "SAFE";
+
   const points = forecast.points ?? [];
   const horizon = fmtHorizon(forecast.horizon_s);
   const u = getUrgency(status, lead, horizon);
   const color = u.color;
   const danger = u.key === "IMMEDIATE" || u.key === "SOON";
+
+  // Prefer the agent's own reasoning + recommendation for the sub-line.
+  const subText =
+    hasAgent && forecast.agent_reason
+      ? `${forecast.agent_reason}${
+          forecast.agent_recommendation
+            ? ` — ${forecast.agent_recommendation}`
+            : ""
+        }`
+      : u.sub;
+
+  // Single source of truth for the risk verdict shown everywhere in this panel:
+  // the headline number, the imagined-field label, and the risk curve all use
+  // the SAME number + status so their severity categories always agree.
+  const STATUS_HEX: Record<string, string> = {
+    SAFE: "#3FB950", WARNING: "#D29922", DANGER: "#F85149",
+  };
+  const verdictColor = STATUS_HEX[status] ?? color;
+  const rawPeak = points.reduce((m, p) => Math.max(m, p.risk), 0);
+  const curveScale = hasAgent && rawPeak > 0 ? riskNum / rawPeak : 1;
+  const shownPoints =
+    curveScale === 1
+      ? points
+      : points.map((p) => ({
+          ...p,
+          risk: Math.round(Math.min(100, p.risk * curveScale)),
+        }));
 
   return (
     <div
@@ -100,7 +139,20 @@ export default function ForecastPanel({ forecast }: { forecast: Forecast }) {
     >
       <div className="panel-header">
         <p className="panel-label">Crowd Projection · Next {horizon}</p>
-        <span className="badge-teal text-[9px] px-1.5 py-0.5">World Model</span>
+        <span
+          className={`text-[9px] px-1.5 py-0.5 ${
+            hasAgent
+              ? "badge bg-lavender/15 text-lavender border-lavender/40"
+              : "badge-teal"
+          }`}
+          title={
+            hasAgent
+              ? "Crush risk decided by the Claude agent reasoning over physics, trend and the world-model forecast"
+              : "Risk projected by the world model"
+          }
+        >
+          {hasAgent ? "Agent · Claude" : "World Model"}
+        </span>
       </div>
 
       <div className="p-4 flex flex-col gap-3">
@@ -135,14 +187,16 @@ export default function ForecastPanel({ forecast }: { forecast: Forecast }) {
               {u.headline}
             </p>
             <p className="font-mono text-[10px] text-text3 mt-0.5 leading-snug">
-              {u.sub}
+              {subText}
             </p>
           </div>
           <div className="text-right flex-shrink-0">
             <p className="kpi-value text-2xl leading-none" style={{ color }}>
-              {Math.round(forecast.projected_risk ?? 0)}%
+              {riskNum}%
             </p>
-            <p className="font-mono text-[9px] text-text3 mt-0.5">peak risk</p>
+            <p className="font-mono text-[9px] text-text3 mt-0.5">
+              {hasAgent ? "agent risk" : "peak risk"}
+            </p>
           </div>
         </div>
 
@@ -160,6 +214,13 @@ export default function ForecastPanel({ forecast }: { forecast: Forecast }) {
                 <div className="absolute top-2 left-2 font-mono text-[8px] text-text3 bg-void/70 px-1.5 py-0.5 rounded">
                   IMAGINED · +{horizon}
                 </div>
+                {/* Unified risk label — same number/status as the headline. */}
+                <div
+                  className="absolute top-2 right-2 font-mono text-[8px] px-1.5 py-0.5 rounded bg-void/70"
+                  style={{ color: verdictColor }}
+                >
+                  {status} · {riskNum}%
+                </div>
               </>
             ) : (
               <p className="font-mono text-[10px] text-text3">No projection</p>
@@ -168,10 +229,10 @@ export default function ForecastPanel({ forecast }: { forecast: Forecast }) {
 
           {/* Risk curve over the projection window */}
           <div className="flex flex-col justify-center">
-            {points.length > 1 ? (
+            {shownPoints.length > 1 ? (
               <div className="h-[140px] -mx-1">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={points} margin={{ top: 6, right: 8, left: -18, bottom: 0 }}>
+                  <AreaChart data={shownPoints} margin={{ top: 6, right: 8, left: -18, bottom: 0 }}>
                     <defs>
                       <linearGradient id="riskFill" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor={color} stopOpacity={0.4} />
