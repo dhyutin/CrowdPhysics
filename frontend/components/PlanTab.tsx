@@ -259,7 +259,7 @@ export default function PlanTab() {
       </div>
 
       {/* ── 3D simulation ────────────────────────────── */}
-      <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto min-w-0">
+      <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto min-w-0 min-h-0 [&>*]:shrink-0">
         {selected && m && (
           <div className="grid grid-cols-4 gap-3 animate-fade-in">
             <KPICard label="Crowd" value={result!.n_people.toLocaleString()} sub="people simulated" color="text-text1" />

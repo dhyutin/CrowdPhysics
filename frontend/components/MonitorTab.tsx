@@ -661,7 +661,7 @@ export default function MonitorTab() {
       </div>
 
       {/* ── Analysis (right half) ────────────────────── */}
-      <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto min-w-0 min-h-0">
+      <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto min-w-0 min-h-0 [&>*]:shrink-0">
         <div className="flex items-center justify-between">
           <p className="panel-label">Analysis</p>
           {streaming ? (
