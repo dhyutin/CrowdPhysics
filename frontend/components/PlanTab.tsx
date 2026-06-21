@@ -294,6 +294,19 @@ export default function PlanTab() {
                 </span>
               ))}
             </div>
+            <div className="card-inset p-2.5 flex items-center justify-between">
+              <div>
+                <p className="kpi-label">Max Capacity</p>
+                <p className="font-mono text-[8px] text-text3 mt-0.5">
+                  {result.capacity_estimate
+                    ? `${result.capacity_estimate.area_m2.toLocaleString()} m² · ${result.capacity_estimate.people_per_m2}/m²`
+                    : "from reconstruction"}
+                </p>
+              </div>
+              <p className="kpi-value text-lg text-lavender">
+                {(result.venue_max_capacity ?? result.layout.capacity ?? 0).toLocaleString()}
+              </p>
+            </div>
             {result.layout.notes && (
               <p className="font-mono text-[9px] text-text2 leading-tight italic">“{result.layout.notes}”</p>
             )}
@@ -348,6 +361,7 @@ export default function PlanTab() {
                     nPeople={result!.n_people}
                     frameRef={frameRef}
                     playingRef={playingRef}
+                    agentPlan={result!.agent_plan}
                   />
                   <div className="absolute top-3 right-3 flex flex-col gap-1 bg-void/80 px-2 py-2 rounded pointer-events-none">
                     {[
@@ -360,6 +374,12 @@ export default function PlanTab() {
                         <span className="font-mono text-[8px] text-text3 capitalize">{l}</span>
                       </div>
                     ))}
+                    {result!.agent_plan?.behaviors?.length ? (
+                      <div className="flex items-center gap-1.5 mt-1 pt-1 border-t border-border">
+                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: "#A371F7" }} />
+                        <span className="font-mono text-[8px] text-text3">LLM-piloted</span>
+                      </div>
+                    ) : null}
                   </div>
                   {result!.n_people > 1400 && (
                     <div className="absolute bottom-3 left-3 bg-void/80 px-2 py-1 rounded pointer-events-none">
@@ -460,6 +480,40 @@ export default function PlanTab() {
       <div className="w-80 flex-shrink-0 flex flex-col border-l border-border overflow-y-auto">
         <div className="p-4 flex flex-col gap-3">
           {result?.agent_trace && <AgentTrace steps={result.agent_trace} title="Planning Agents" />}
+
+          {result?.agent_plan?.behaviors?.length ? (
+            <div className="card flex flex-col animate-fade-in">
+              <div className="panel-header">
+                <p className="panel-label">Crowd Behavior</p>
+                <span className="badge-teal text-[9px] px-1.5 py-0.5">Agent LLM</span>
+              </div>
+              <div className="p-3 flex flex-col gap-2">
+                <p className="font-mono text-[9px] text-text3 leading-snug">
+                  <span className="text-lavender">
+                    {Math.round((result.agent_plan.llm_fraction ?? 0) * 100)}%
+                  </span>{" "}
+                  of agents follow these reasoned intents (LLM world model); the
+                  rest move on crowd physics.
+                </p>
+                {result.agent_plan.behaviors.map((b, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="w-2 h-2 rounded-full bg-lavender/70 mt-1 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-xs text-text1 leading-tight">
+                        {b.name}{" "}
+                        <span className="font-mono text-[9px] text-text3">
+                          · {Math.round(b.fraction * 100)}%
+                        </span>
+                      </p>
+                      {b.intent && (
+                        <p className="font-mono text-[9px] text-text3 leading-snug">{b.intent}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {result?.plan_points && <PlanPoints points={result.plan_points} />}
 

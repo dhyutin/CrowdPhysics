@@ -260,36 +260,53 @@ Write for the event director, not an engineer. Be direct."""
 
 # ─── ROLE 6: EVENT PLANNER (purpose-aware arrangement) ───────────────────────
 
-def plan_event_layout(layout, sim_results, purpose, capacity):
+def plan_event_layout(layout, sim_results, purpose, capacity, capacity_check=None):
     """
     Agentic planner: given a detected venue layout, the simulation results and
-    the event's PURPOSE, produce a concrete plan for how to arrange people,
-    barriers and staff so the event is safe for that specific use.
+    the event's PURPOSE, produce a concrete plan for how the crowd ENTERS, STAYS
+    and EXITS the space safely for that specific use.
 
     Args:
-        layout:      dict from extract_venue_layout()
-        sim_results: dict (peak_pressure, n_danger_zones, safe_capacity, ...)
-        purpose:     str — what the space will be used for (concert, rally,
-                     expo, prayer, evacuation drill, sports, market, ...)
-        capacity:    int — expected attendance
+        layout:          dict from extract_venue_layout()
+        sim_results:     dict (peak_pressure, n_danger_zones, safe_capacity, ...)
+        purpose:         str — what the space will be used for
+        capacity:        int — attendance being planned for
+        capacity_check:  optional dict from _capacity_check() flagging whether
+                         the requested headcount is reasonable for the area.
 
     Returns:
-        str — structured arrangement plan for the event organizer.
+        str — structured arrangement plan (Entry / Staying / Exit + capacity).
     """
+    cap_note = ""
+    if capacity_check:
+        if capacity_check.get("verdict") == "unreasonable":
+            cap_note = (
+                f"\nCAPACITY WARNING: the requested {capacity_check['given']:,} "
+                f"people is UNREASONABLE for this floor area — it exceeds the "
+                f"safe limit of ~{capacity_check['crush_capacity']:,}. You are "
+                f"planning for a healthy ~{capacity_check['healthy_capacity']:,} "
+                f"instead. Say this plainly and explain why.")
+        elif capacity_check.get("verdict") == "tight":
+            cap_note = (
+                f"\nCAPACITY NOTE: {capacity_check['given']:,} is dense for this "
+                f"area (healthy ~{capacity_check['healthy_capacity']:,}). Feasible "
+                f"but call out the extra egress/monitoring needed.")
+
     resp = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=700,
+        max_tokens=750,
         system=(
             "You are an event crowd-planning agent. Given a venue's top-down "
-            "layout and a crowd fluid-dynamics simulation, you design HOW to "
-            "use the space safely for a stated purpose. Be concrete and spatial "
-            "— reference entries, exits, the stage and the danger zones by their "
-            "positions. Write for an event organizer, not an engineer."
+            "layout and a crowd fluid-dynamics simulation, you design HOW the "
+            "crowd will ENTER, STAY and EXIT the space safely for a stated "
+            "purpose. Be concrete and spatial — reference entries, exits, the "
+            "stage and danger zones by their positions. Write for an event "
+            "organizer, not an engineer."
         ),
         messages=[{
             "role": "user",
             "content": f"""EVENT PURPOSE: {purpose or 'general gathering'}
-EXPECTED ATTENDANCE: {capacity:,}
+PLANNING FOR: {capacity:,} people{cap_note}
 
 VENUE (top-down, normalized 0-1 coords, origin top-left):
 {json.dumps({"name": layout.get("name"), "view": layout.get("view"),
@@ -298,12 +315,12 @@ VENUE (top-down, normalized 0-1 coords, origin top-left):
 CROWD SIMULATION RESULTS:
 {json.dumps(sim_results, indent=2)}
 
-Produce a plan with EXACTLY these sections:
-ARRANGEMENT: how to position people/zones for this purpose (2-3 sentences, spatial).
-FLOW DESIGN: which entries/exits to use for ingress vs egress, and barrier placement.
-CAPACITY PLAN: recommended attendance for this purpose + why.
+Produce a plan with EXACTLY these sections, in this order:
+ENTRY: how the crowd arrives and enters — which entries to use, queueing/metering, arrival pacing (2-3 sentences, spatial).
+STAYING: how they occupy the space during the event — zones, where to keep density low, sightlines and circulation lanes (2-3 sentences, spatial).
+EXIT: how they leave — egress routes per zone, end-of-event surge handling, dispersal (2-3 sentences, spatial).
+CAPACITY: the recommended healthy attendance and why (call out clearly if the requested number is unreasonable).
 STAFFING: where to place stewards/security relative to danger zones (numbered, max 4).
-RISKS: the top failure mode for THIS purpose and how the layout mitigates it.
 
 Be specific and directive."""
         }]
@@ -895,6 +912,139 @@ Output ONLY this JSON (no markdown):
     # (which is a superset of the plain decor types).
     refined["decor"] = _sanitize_props(merged.get("decor") or [])
     return refined, summary
+
+
+# ─── ROLE 7d: AGENT-LLM BEHAVIOR PLANNER ──────────────────────────────────────
+
+def _behaviors_from_layout(layout) -> dict:
+    """
+    Deterministic fallback used when the LLM is unavailable: derive plausible
+    crowd intents directly from the detected structure (head for the stage,
+    drain to the gates, mill in the open middle).
+    """
+    elements = layout.get("elements", []) or []
+
+    def _center(e):
+        return [round(float(e.get("x", 0)) + float(e.get("w", 0)) / 2, 3),
+                round(float(e.get("y", 0)) + float(e.get("h", 0)) / 2, 3)]
+
+    stage = next((e for e in elements if e.get("type") == "stage"), None)
+    gates = [e for e in elements if e.get("type") in ("gate", "entry")]
+
+    behaviors = []
+    if stage:
+        behaviors.append({"name": "Toward the stage", "goal": _center(stage),
+                          "fraction": 0.45, "speed": 1.2,
+                          "intent": "press toward the main attraction"})
+    if gates:
+        g = gates[0]
+        behaviors.append({"name": "Exit seekers", "goal": _center(g),
+                          "fraction": 0.3, "speed": 1.1,
+                          "intent": "make for the nearest way out"})
+    behaviors.append({"name": "Wanderers", "goal": [0.5, 0.55],
+                      "fraction": 0.25 if behaviors else 1.0, "speed": 0.7,
+                      "intent": "drift around the open floor"})
+    return {"llm_fraction": 0.3, "behaviors": behaviors, "source": "layout"}
+
+
+def _sanitize_behaviors(data) -> dict:
+    """Clamp an LLM behavior plan to safe ranges; renormalize fractions."""
+    try:
+        raw = data.get("behaviors", []) if isinstance(data, dict) else []
+    except Exception:
+        raw = []
+    clean = []
+    for b in raw[:6]:
+        try:
+            gx = float(b["goal"][0]); gy = float(b["goal"][1])
+        except Exception:
+            continue
+        clean.append({
+            "name":     str(b.get("name", "Group"))[:32],
+            "goal":     [round(min(0.97, max(0.03, gx)), 3),
+                         round(min(0.97, max(0.03, gy)), 3)],
+            "fraction": float(b.get("fraction", 0.0) or 0.0),
+            "speed":    round(min(1.8, max(0.4, float(b.get("speed", 1.0) or 1.0))), 2),
+            "intent":   str(b.get("intent", ""))[:80],
+        })
+    if not clean:
+        return {}
+    total = sum(max(0.0, b["fraction"]) for b in clean) or 1.0
+    for b in clean:
+        b["fraction"] = round(max(0.0, b["fraction"]) / total, 3)
+    llm_frac = 0.3
+    if isinstance(data, dict):
+        try:
+            llm_frac = min(0.8, max(0.05, float(data.get("llm_fraction", 0.3))))
+        except Exception:
+            pass
+    return {"llm_fraction": round(llm_frac, 2), "behaviors": clean, "source": "llm"}
+
+
+def agent_behaviors(layout, purpose="general gathering", n_people=0):
+    """
+    Agent-LLM acting as a behavioral world model. Given the venue layout and
+    event context, Claude decides how distinct GROUPS of the crowd intend to
+    move — each a named behavior with a goal point (normalized 0-1), the
+    fraction of LLM-piloted agents that follow it, and a speed.
+
+    The simulator then drives `llm_fraction` of agents toward these intents
+    (goal-seeking) while the rest move purely on the physics world model. This
+    blends learned crowd fluid dynamics with high-level, reasoned intent.
+
+    Returns {llm_fraction, behaviors[], source}; never raises.
+    """
+    compact = {
+        "archetype": layout.get("archetype", "hall"),
+        "elements": [
+            {"type": e.get("type"), "label": e.get("label", ""),
+             "x": e.get("x"), "y": e.get("y"), "w": e.get("w"), "h": e.get("h")}
+            for e in (layout.get("elements", []) or [])
+        ][:24],
+    }
+    prompt = f"""You are the behavioral world model for a crowd simulation. Decide how groups of people INTEND to move in this venue.
+
+VENUE (normalized 0-1 coords, origin TOP-LEFT, x=right, y=down):
+{json.dumps(compact, indent=2)}
+
+EVENT: {purpose}
+EXPECTED CROWD: {n_people or "unspecified"}
+
+Define 2-4 behavior groups that together describe realistic intent for THIS event and layout (e.g. press toward a stage, drain to exits, queue at a gate, browse the middle, gather at a feature). For each give a goal point inside the venue.
+
+Also pick llm_fraction: the share of agents (0.05-0.8) that should be driven by these reasoned intents; the rest follow pure crowd physics.
+
+Output ONLY JSON:
+{{"llm_fraction": 0.3,
+  "behaviors": [
+    {{"name": "short label", "goal": [x, y], "fraction": 0.5, "speed": 1.2, "intent": "one short phrase"}}
+  ]}}
+Fractions across behaviors should sum to ~1."""
+
+    try:
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=700,
+            system=("You plan high-level crowd intent for a simulator and reply "
+                    "with strict JSON only."),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        if "```" in raw:
+            for part in raw.split("```"):
+                cand = part.strip()
+                if cand.startswith("json"):
+                    cand = cand[4:].strip()
+                if cand.startswith("{"):
+                    raw = cand
+                    break
+        data = json.loads(raw.strip())
+        plan = _sanitize_behaviors(data)
+        if plan.get("behaviors"):
+            return plan
+    except Exception:
+        pass
+    return _behaviors_from_layout(layout)
 
 
 # ─── AGENT 1: VENUE AGENT ────────────────────────────────────────────────────

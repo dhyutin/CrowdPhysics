@@ -11,6 +11,7 @@ import type {
   DangerZone,
   DecorProp,
   VenueArchetype,
+  AgentPlan,
 } from "@/lib/api";
 
 // World is a SIZE x SIZE square centered at the origin, floor on the XZ plane,
@@ -619,48 +620,92 @@ function DangerMarkers({ zones }: { zones: DangerZone[] }) {
   );
 }
 
-// ── Crowd agents (one InstancedMesh, advected through the field) ──────────────
+// ── Crowd agents — hybrid: physics world-model + agent-LLM goal-seeking ───────
+//
+// `world-model` agents advect through the simulated velocity/pressure field.
+// `llm` agents (a fraction set by the agent-LLM behavior plan) steer toward a
+// reasoned goal point for their group, lightly nudged by the same field so they
+// still jam up in crushes. Two InstancedMeshes so the two kinds read distinctly.
+
+const C_LLM = new THREE.Color("#A371F7"); // agent-LLM piloted (violet)
 
 function Agents({
   scenario,
   count,
   frameRef,
   playingRef,
+  agentPlan,
 }: {
   scenario: Scenario;
   count: number;
   frameRef: MutableRefObject<number>;
   playingRef: MutableRefObject<boolean>;
+  agentPlan?: AgentPlan | null;
 }) {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const wmRef = useRef<THREE.InstancedMesh>(null);
+  const llmRef = useRef<THREE.InstancedMesh>(null);
   const G = scenario.field.grid;
   const walls = scenario.field.walls;
   const pMax = scenario.field.p_max || 1;
 
-  // Per-agent normalized positions, seeded in open (non-wall) space.
-  const pos = useMemo(() => {
-    const arr = new Float32Array(count * 2);
+  // Build per-agent state: positions, kind (llm/world), goal + speed, and the
+  // index of each agent within its own mesh.
+  const sim = useMemo(() => {
+    const behaviors = agentPlan?.behaviors ?? [];
+    const llmFrac = behaviors.length
+      ? Math.max(0, Math.min(0.8, agentPlan?.llm_fraction ?? 0))
+      : 0;
+    const nLLM = Math.round(count * llmFrac);
+
+    const pos = new Float32Array(count * 2);
+    const goal = new Float32Array(count * 2);
+    const speed = new Float32Array(count);
+    const isLLM = new Uint8Array(count);
+    const local = new Int32Array(count);
+
+    // Cumulative behavior fractions to spread LLM agents across groups.
+    const cum: number[] = [];
+    let acc = 0;
+    for (const b of behaviors) { acc += Math.max(0, b.fraction || 0); cum.push(acc); }
+    const totalFrac = acc || 1;
+
+    let wmLocal = 0, llmLocal = 0;
     for (let i = 0; i < count; i++) {
-      let nx = 0.5,
-        ny = 0.5;
+      let nx = 0.5, ny = 0.5;
       for (let tries = 0; tries < 12; tries++) {
         nx = 0.04 + Math.random() * 0.92;
         ny = 0.04 + Math.random() * 0.92;
         if (!isWall(walls, G, nx, ny)) break;
       }
-      arr[i * 2] = nx;
-      arr[i * 2 + 1] = ny;
+      pos[i * 2] = nx;
+      pos[i * 2 + 1] = ny;
+
+      if (i < nLLM && behaviors.length) {
+        isLLM[i] = 1;
+        // Assign a behavior group by cumulative fraction.
+        const t = ((i + 0.5) / Math.max(1, nLLM)) * totalFrac;
+        let bi = cum.findIndex((c) => t <= c);
+        if (bi < 0) bi = behaviors.length - 1;
+        const b = behaviors[bi];
+        goal[i * 2] = b.goal?.[0] ?? 0.5;
+        goal[i * 2 + 1] = b.goal?.[1] ?? 0.5;
+        speed[i] = b.speed || 1.0;
+        local[i] = llmLocal++;
+      } else {
+        isLLM[i] = 0;
+        speed[i] = 1.0;
+        local[i] = wmLocal++;
+      }
     }
-    return arr;
-    // reseed when the scenario (its walls) or agent count changes
-  }, [count, G, walls]);
+    return { pos, goal, speed, isLLM, local, nLLM, wmCount: count - nLLM };
+  }, [count, G, walls, agentPlan]);
 
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const color = useMemo(() => new THREE.Color(), []);
 
   useFrame((_, delta) => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
+    const wm = wmRef.current;
+    const llm = llmRef.current;
     const frames = scenario.field.frames;
     const f = Math.min(frames - 1, Math.max(0, Math.floor(frameRef.current)));
     const vx = scenario.field.vx[f];
@@ -668,12 +713,15 @@ function Agents({
     const pr = scenario.field.pressure[f];
     if (!vx || !vy || !pr) return;
 
+    const { pos, goal, speed, isLLM, local } = sim;
     const moving = playingRef.current;
     const dt = Math.min(delta, 0.05);
-    const KV = 0.9; // follow the flow field
-    const KP = 0.05; // gather toward higher pressure (crowd build-up)
+    const KV = 0.9;     // follow the flow field (world-model agents)
+    const KP = 0.05;    // gather toward higher pressure (crowd build-up)
     const NOISE = 0.18;
     const SPEED = 1.6;
+    const GOAL_K = 1.15;  // goal pull (llm agents)
+    const LLM_FIELD = 0.35; // residual field influence on llm agents
 
     const cl = (v: number) => Math.min(G - 1, Math.max(0, v));
 
@@ -682,19 +730,36 @@ function Agents({
       let ny = pos[i * 2 + 1];
       const gx = cl(Math.floor(nx * G));
       const gy = cl(Math.floor(ny * G));
+      const llmAgent = isLLM[i] === 1;
 
       if (moving) {
         const ux = vx[gy][gx];
         const uy = vy[gy][gx];
-        const gpx = pr[gy][cl(gx + 1)] - pr[gy][cl(gx - 1)];
-        const gpy = pr[cl(gy + 1)][gx] - pr[cl(gy - 1)][gx];
+        let dx: number, dy: number;
 
-        const dx = ux * KV + gpx * KP + (Math.random() - 0.5) * NOISE;
-        const dy = uy * KV + gpy * KP + (Math.random() - 0.5) * NOISE;
+        if (llmAgent) {
+          // Goal-seeking intent + a little field so crushes still impede them.
+          let tx = goal[i * 2] - nx;
+          let ty = goal[i * 2 + 1] - ny;
+          const dist = Math.hypot(tx, ty) || 1e-3;
+          if (dist < 0.06) {
+            // Arrived → mill around the goal instead of freezing.
+            tx = (Math.random() - 0.5);
+            ty = (Math.random() - 0.5);
+          } else {
+            tx /= dist; ty /= dist;
+          }
+          dx = tx * GOAL_K * speed[i] + ux * LLM_FIELD + (Math.random() - 0.5) * NOISE;
+          dy = ty * GOAL_K * speed[i] + uy * LLM_FIELD + (Math.random() - 0.5) * NOISE;
+        } else {
+          const gpx = pr[gy][cl(gx + 1)] - pr[gy][cl(gx - 1)];
+          const gpy = pr[cl(gy + 1)][gx] - pr[cl(gy - 1)][gx];
+          dx = ux * KV + gpx * KP + (Math.random() - 0.5) * NOISE;
+          dy = uy * KV + gpy * KP + (Math.random() - 0.5) * NOISE;
+        }
 
         let cand_x = nx + dx * dt * SPEED;
         let cand_y = ny + dy * dt * SPEED;
-
         if (isWall(walls, G, cand_x, ny)) cand_x = nx;
         if (isWall(walls, G, nx, cand_y)) cand_y = ny;
 
@@ -705,26 +770,58 @@ function Agents({
       }
 
       const p = pr[gy][gx];
-      dummy.position.set(wx(nx), 0.35, wz(ny));
+      dummy.position.set(wx(nx), llmAgent ? 0.42 : 0.35, wz(ny));
       dummy.updateMatrix();
-      mesh.setMatrixAt(i, dummy.matrix);
-      pressureColor(color, p, pMax);
-      mesh.setColorAt(i, color);
+
+      if (llmAgent) {
+        if (!llm) continue;
+        llm.setMatrixAt(local[i], dummy.matrix);
+        // Violet base, flushing toward red where pressure is high.
+        const t = Math.max(0, Math.min(1, p / (pMax || 1)));
+        color.copy(C_LLM).lerp(C_HIGH, t * 0.8);
+        llm.setColorAt(local[i], color);
+      } else {
+        if (!wm) continue;
+        wm.setMatrixAt(local[i], dummy.matrix);
+        pressureColor(color, p, pMax);
+        wm.setColorAt(local[i], color);
+      }
     }
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    if (wm) {
+      wm.instanceMatrix.needsUpdate = true;
+      if (wm.instanceColor) wm.instanceColor.needsUpdate = true;
+    }
+    if (llm) {
+      llm.instanceMatrix.needsUpdate = true;
+      if (llm.instanceColor) llm.instanceColor.needsUpdate = true;
+    }
   });
 
   return (
-    <instancedMesh
-      key={`${scenario.id}-${count}`}
-      ref={meshRef}
-      args={[undefined, undefined, count]}
-      frustumCulled={false}
-    >
-      <cylinderGeometry args={[0.12, 0.12, 0.65, 6]} />
-      <meshBasicMaterial toneMapped={false} />
-    </instancedMesh>
+    <group>
+      {sim.wmCount > 0 && (
+        <instancedMesh
+          key={`wm-${scenario.id}-${sim.wmCount}`}
+          ref={wmRef}
+          args={[undefined, undefined, sim.wmCount]}
+          frustumCulled={false}
+        >
+          <cylinderGeometry args={[0.12, 0.12, 0.65, 6]} />
+          <meshBasicMaterial toneMapped={false} />
+        </instancedMesh>
+      )}
+      {sim.nLLM > 0 && (
+        <instancedMesh
+          key={`llm-${scenario.id}-${sim.nLLM}`}
+          ref={llmRef}
+          args={[undefined, undefined, sim.nLLM]}
+          frustumCulled={false}
+        >
+          <coneGeometry args={[0.17, 0.85, 6]} />
+          <meshBasicMaterial toneMapped={false} />
+        </instancedMesh>
+      )}
+    </group>
   );
 }
 
@@ -769,12 +866,14 @@ export default function Venue3D({
   nPeople,
   frameRef,
   playingRef,
+  agentPlan,
   maxAgents = 1400,
 }: {
   scenario: Scenario;
   nPeople: number;
   frameRef: MutableRefObject<number>;
   playingRef: MutableRefObject<boolean>;
+  agentPlan?: AgentPlan | null;
   maxAgents?: number;
 }) {
   const count = Math.max(40, Math.min(maxAgents, nPeople || 600));
@@ -819,7 +918,13 @@ export default function Venue3D({
       <Decor layout={scenario.layout} />
       <Markers layout={scenario.layout} />
       <DangerMarkers zones={scenario.danger_zones} />
-      <Agents scenario={scenario} count={count} frameRef={frameRef} playingRef={playingRef} />
+      <Agents
+        scenario={scenario}
+        count={count}
+        frameRef={frameRef}
+        playingRef={playingRef}
+        agentPlan={agentPlan}
+      />
 
       <OrbitControls
         ref={controlsRef}

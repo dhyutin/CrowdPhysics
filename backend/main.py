@@ -93,6 +93,7 @@ from claude_interpreter import (
     extract_venue_layout,
     extract_scene_props,
     refine_venue_layout,
+    agent_behaviors,
     plan_event_layout,
     event_plan_points,
 )
@@ -1712,6 +1713,75 @@ def _capacity_from_area(area_m2: float, seating: str, density: float) -> dict | 
     }
 
 
+# Comfortable ("healthy") and crush ("absolute max") occupant densities by setup.
+_HEALTHY_PPL = {"seated": 1.0, "mixed": 1.5, "standing": 2.0}
+_CRUSH_PPL   = {"seated": 2.0, "mixed": 3.0, "standing": 4.0}
+_AREA_USABLE = 0.78
+
+
+def _area_capacities(area_m2: float, seating: str) -> dict | None:
+    """Healthy and physical-max capacities a floor area can hold by setup."""
+    try:
+        area = float(area_m2)
+    except (TypeError, ValueError):
+        return None
+    if area <= 0:
+        return None
+    seating = (seating or "standing").lower()
+    comfortable = _HEALTHY_PPL.get(seating, 2.0)
+    crush = _CRUSH_PPL.get(seating, 4.0)
+    usable = area * _AREA_USABLE
+    return {
+        "healthy_capacity": max(1, int(round(usable * comfortable))),
+        "crush_capacity":   max(1, int(round(usable * crush))),
+        "comfortable_ppl":  comfortable,
+        "crush_ppl":        crush,
+    }
+
+
+def _capacity_check(area_m2: float, seating: str, n_people: int | None) -> dict | None:
+    """
+    Judge whether a requested headcount is reasonable for the floor area.
+
+    Returns a verdict ('ok' | 'tight' | 'unreasonable'), the healthy and crush
+    capacities, and `planned_capacity` — what we should actually simulate. An
+    unreasonable request is clamped down to the healthy range.
+    """
+    if not n_people or n_people <= 0:
+        return None
+    caps = _area_capacities(area_m2, seating)
+    if not caps:
+        return None
+    healthy = caps["healthy_capacity"]
+    crush = caps["crush_capacity"]
+    area = round(float(area_m2), 1)
+
+    if n_people > crush:
+        return {
+            "given":            n_people, "healthy_capacity": healthy,
+            "crush_capacity":   crush,    "planned_capacity": healthy,
+            "verdict":          "unreasonable",
+            "message": (f"{n_people:,} people in {area:g} m² is unsafe — beyond the "
+                        f"~{crush:,} crush limit ({caps['crush_ppl']}/m²). Planning "
+                        f"for a healthy ~{healthy:,} ({caps['comfortable_ppl']}/m²)."),
+        }
+    if n_people > healthy:
+        return {
+            "given":            n_people, "healthy_capacity": healthy,
+            "crush_capacity":   crush,    "planned_capacity": n_people,
+            "verdict":          "tight",
+            "message": (f"{n_people:,} is dense for {area:g} m² (healthy ~{healthy:,}). "
+                        f"Feasible with extra egress and monitoring."),
+        }
+    return {
+        "given":            n_people, "healthy_capacity": healthy,
+        "crush_capacity":   crush,    "planned_capacity": n_people,
+        "verdict":          "ok",
+        "message": (f"{n_people:,} is within the healthy range for {area:g} m² "
+                    f"(up to ~{healthy:,})."),
+    }
+
+
 def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
                   duration_min: int, seating: str, ingress: str, notes: str,
                   area_m2: float = 0.0, n_props: int = 0,
@@ -1723,9 +1793,23 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
     """
     cap_hint = n_people if n_people and n_people > 0 else None
     area_est = _capacity_from_area(area_m2, seating, density)
-    final_capacity = (cap_hint
-                      or (area_est["max_capacity"] if area_est else None)
-                      or layout.get("capacity", 5000))
+
+    # The venue's MAX capacity is set by the area the user gave (people the
+    # space can physically hold); fall back to the vision-detected capacity.
+    venue_max = area_est["max_capacity"] if area_est else layout.get("capacity", 5000)
+    layout["capacity"] = venue_max
+
+    # Sanity-check the requested headcount against the area. An unreasonable
+    # number is flagged and we plan for the healthy range instead.
+    cap_check = _capacity_check(area_m2, seating, cap_hint)
+
+    if cap_check and cap_check["verdict"] == "unreasonable":
+        final_capacity = cap_check["planned_capacity"]   # healthy range
+    else:
+        # Crowd actually simulated: explicit count → area-derived max → venue max.
+        final_capacity = (cap_hint
+                          or (area_est["max_capacity"] if area_est else None)
+                          or venue_max)
 
     # ── Simulate every scenario ───────────────────────────────────────────
     variants = _generate_scenarios(layout, final_capacity)
@@ -1788,7 +1872,8 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
     }
 
     try:
-        plan_text = plan_event_layout(best["layout"], sim_results, purpose, final_capacity)
+        plan_text = plan_event_layout(best["layout"], sim_results, purpose,
+                                      final_capacity, capacity_check=cap_check)
     except Exception as exc:
         plan_text = f"(Planning agent unavailable: {exc})"
 
@@ -1808,7 +1893,17 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
     if not points:
         points = _fallback_points(best)
 
+    # Agent-LLM behavioral world model: how groups of the crowd intend to move.
+    # A fraction of agents follow these reasoned goals; the rest move purely on
+    # the physics world model (hybrid simulation in the 3D view).
+    try:
+        agent_plan = agent_behaviors(best["layout"], purpose, final_capacity)
+    except Exception:
+        agent_plan = None
+
     n_danger = best["metrics"]["n_danger_zones"]
+    n_behaviors = len((agent_plan or {}).get("behaviors", []))
+    llm_pct = int(round((agent_plan or {}).get("llm_fraction", 0.0) * 100))
     first_agent = (
         {"agent": "Scene Editor · Claude", "icon": "claude",
          "action": "Applied your edits to the 3D scene",
@@ -1831,6 +1926,11 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
          "action": "Generated layout scenarios",
          "detail": f"{len(scenarios)} arrangements simulated & ranked",
          "status": "ok"},
+        {"agent": "Behavior Agent · Claude", "icon": "claude",
+         "action": "Modeled crowd intent (agent-LLM world model)",
+         "detail": (f"{n_behaviors} intent groups · {llm_pct}% LLM-piloted agents"
+                    if n_behaviors else "physics-only crowd"),
+         "status": "ok"},
         {"agent": "Crowd Simulator", "icon": "pulse",
          "action": "Ran crowd fluid dynamics + world model",
          "detail": (f"best peak pressure {best['metrics']['peak_pressure']:.1f} · "
@@ -1845,6 +1945,7 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
     return {
         "layout":            layout,
         "n_people":          final_capacity,
+        "venue_max_capacity": venue_max,
         "purpose":           purpose,
         "scenarios":         scenarios,
         "best_scenario_id":  best_id,
@@ -1852,6 +1953,8 @@ def _build_plan3d(layout: dict, *, purpose: str, n_people: int, density: float,
         "plan":              plan_text,
         "safety_report":     report,
         "capacity_estimate": area_est,
+        "capacity_check":    cap_check,
+        "agent_plan":        agent_plan,
         "agent_trace":       agent_trace,
     }
 

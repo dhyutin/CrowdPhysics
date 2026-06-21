@@ -541,9 +541,27 @@ export interface CapacityEstimate {
   max_capacity: number;
 }
 
+// Agent-LLM behavioral world model: groups of agents move toward reasoned
+// goal points; `llm_fraction` of the crowd follows these, the rest move on
+// the physics world model.
+export interface AgentBehavior {
+  name: string;
+  goal: [number, number]; // normalized 0-1 (x,y)
+  fraction: number;
+  speed: number;
+  intent: string;
+}
+
+export interface AgentPlan {
+  llm_fraction: number;
+  behaviors: AgentBehavior[];
+  source?: string; // "llm" | "layout"
+}
+
 export interface Plan3DResult {
   layout: VenueLayout;
   n_people: number;
+  venue_max_capacity?: number;
   purpose: string;
   scenarios: Scenario[];
   best_scenario_id: string;
@@ -552,6 +570,7 @@ export interface Plan3DResult {
   safety_report: string;
   agent_trace: AgentTraceStep[];
   capacity_estimate?: CapacityEstimate | null;
+  agent_plan?: AgentPlan | null;
   chat_reply?: string; // present on /api/plan3d/refine responses
 }
 
