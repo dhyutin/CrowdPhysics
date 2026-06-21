@@ -1,65 +1,65 @@
 {
   "latent_dim": 64,
-  "n_frames": 1440,
+  "n_frames": 1350,
   "concepts": {
     "crowd_velocity": {
-      "r2": 0.755,
+      "r2": 0.92,
       "top_dimensions": [
-        43,
-        11,
-        52,
-        58,
-        55
+        51,
+        40,
+        53,
+        60,
+        4
       ],
       "description": "Mean crowd movement speed"
     },
     "turbulence": {
-      "r2": 0.511,
+      "r2": 0.896,
       "top_dimensions": [
-        43,
-        11,
-        28,
-        0,
-        41
+        53,
+        51,
+        4,
+        24,
+        13
       ],
       "description": "Chaotic motion intensity"
     },
     "backward_pressure": {
-      "r2": 0.493,
+      "r2": 0.917,
       "top_dimensions": [
-        32,
-        17,
-        52,
-        49,
-        34
+        51,
+        40,
+        53,
+        60,
+        4
       ],
       "description": "Crowd moving against primary flow"
     },
     "boundary_stress": {
-      "r2": 0.585,
+      "r2": 0.986,
       "top_dimensions": [
-        52,
-        43,
-        11,
-        51,
-        57
+        42,
+        34,
+        46,
+        9,
+        62
       ],
       "description": "Compression at walls and barriers"
     }
   },
   "unknown": {
     "dimensions": [
-      36,
-      56,
+      58,
+      0,
+      21,
       22,
-      26,
-      35
+      31
     ],
-    "separation_z_score": 1.94,
-    "high_surprise_activation": 1.098,
-    "calm_activation": 0.031,
-    "verdict": "1.94\u03c3 separation between pre-anomaly and calm frames on unexplained dimensions"
+    "separation_z_score": 0.91,
+    "high_surprise_activation": 0.065,
+    "calm_activation": -0.097,
+    "verdict": "0.91\u03c3 separation between pre-anomaly and calm frames on unexplained dimensions"
   },
-  "table_md": "| Concept | R\u00b2 | Key Dimensions | Status |\n|---|---|---|---|\n| Crowd Velocity | **0.76** | [43, 11, 52] | \u2705 Discovered |\n| Turbulence | **0.51** | [43, 11, 28] | \u2705 Discovered |\n| Backward Pressure | **0.49** | [32, 17, 52] | \u2705 Discovered |\n| Boundary Stress | **0.58** | [52, 43, 11] | \u2705 Discovered |\n| **UNKNOWN** | \u2014 | **[36, 56, 22, 26, 35]** | \u2b50 **1.94\u03c3 surprise separation** |",
+  "table_md": "| Concept | R\u00b2 | Key Dimensions | Status |\n|---|---|---|---|\n| Crowd Velocity | **0.92** | [51, 40, 53] | \u2705 Discovered |\n| Turbulence | **0.90** | [53, 51, 4] | \u2705 Discovered |\n| Backward Pressure | **0.92** | [51, 40, 53] | \u2705 Discovered |\n| Boundary Stress | **0.99** | [42, 34, 46] | \u2705 Discovered |\n| **UNKNOWN** | \u2014 | **[58, 0, 21, 22, 31]** | \u2b50 **0.91\u03c3 surprise separation** |",
   "computed": true
 }

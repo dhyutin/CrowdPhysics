@@ -1,0 +1,43 @@
+{
+  "run_id": "world_model_v2_20260620_212450",
+  "job": "world_model_v2",
+  "config": {
+    "epochs": 2,
+    "seq_len": 12,
+    "batch_size": 8,
+    "hidden_dim": 64,
+    "n_layers": 2,
+    "transition_type": "lstm",
+    "lr": 0.0005,
+    "recon_w": 0.1,
+    "kl_dyn_w": 1.0,
+    "kl_reg_w": 0.005,
+    "free_bits": 1.0,
+    "trans_mse_w": 0.0,
+    "device": "mps"
+  },
+  "n_steps": 2,
+  "duration_s": 2.5,
+  "final": {
+    "step": 1,
+    "elapsed_s": 2.5,
+    "loss": 1.025681045320299,
+    "best": 1.025681045320299,
+    "recon": 0.2421171913544337,
+    "kl_dyn": 1.0,
+    "kl_reg": 0.2938641673988766,
+    "lr": 1e-05
+  },
+  "best": {
+    "loss": 1.025681,
+    "best": 1.025681,
+    "recon": 0.25564,
+    "kl_dyn": 1.014092,
+    "kl_reg": 0.557694,
+    "lr": 0.000255
+  },
+  "files": {
+    "csv": "logs/world_model_v2_20260620_212450/metrics.csv",
+    "png": "logs/world_model_v2_20260620_212450/curves.png"
+  }
+}

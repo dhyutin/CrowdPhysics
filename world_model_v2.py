@@ -244,13 +244,41 @@ class CrowdWorldModelV2(nn.Module):
             latent_dim, hidden_dim=hidden_dim, n_layers=n_layers,
             transition_type=transition_type)
         self.latent_dim = latent_dim
+        self.input_dim = input_dim
+
+        # Feature standardization stats, carried WITH the checkpoint as buffers
+        # so the model self-normalizes RAW flow features at both train and
+        # inference time (callers always pass raw features). Without this the
+        # reconstruction term on raw RAFT magnitudes dominates and the VAE
+        # never learns dynamics. Matches CrowdWorldModel (v1) semantics so the
+        # detector/backend keep passing raw features. Set via set_feature_stats.
+        self.register_buffer("feat_mean", torch.zeros(input_dim))
+        self.register_buffer("feat_std", torch.ones(input_dim))
+
+    # ── standardization (v1-compatible) ────────────────────────────────────────
+
+    def set_feature_stats(self, mean, std):
+        """Set the standardization buffers (per-feature mean/std)."""
+        mean_t = torch.as_tensor(mean, dtype=torch.float32).reshape(-1)
+        std_t = torch.as_tensor(std, dtype=torch.float32).reshape(-1)
+        std_t = torch.where(std_t < 1e-6, torch.ones_like(std_t), std_t)
+        self.feat_mean.copy_(mean_t.to(self.feat_mean.device))
+        self.feat_std.copy_(std_t.to(self.feat_std.device))
+
+    def standardize(self, x):
+        """Apply (x - mean) / std using the stored buffers. x: (..., 256)."""
+        return (x - self.feat_mean) / self.feat_std
 
     # ── encoding ──────────────────────────────────────────────────────────────
 
     def encode_dist(self, feature_seq):
-        """Return posterior (mu_e, log_var_e) for a sequence. (b, T, latent)."""
-        b, t, f = feature_seq.shape
-        mu, log_var = self.encoder(feature_seq.reshape(-1, f))
+        """
+        Posterior (mu_e, log_var_e) for a sequence of RAW features.
+        Standardizes internally. (b, T, latent).
+        """
+        x = self.standardize(feature_seq)
+        b, t, f = x.shape
+        mu, log_var = self.encoder(x.reshape(-1, f))
         return (mu.reshape(b, t, self.latent_dim),
                 log_var.reshape(b, t, self.latent_dim))
 

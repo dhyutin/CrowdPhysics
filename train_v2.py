@@ -22,6 +22,7 @@ Env knobs (with the sweep-selected defaults baked in):
 """
 
 import os
+import pickle
 import numpy as np
 import torch
 import torch.nn as nn
@@ -32,6 +33,7 @@ from world_model_v2 import (
 from metrics_logger import MetricsLogger
 
 MODEL_DIR = "models_v2"
+CACHE_PATH = os.environ.get("FEATURE_CACHE", "data/features_cache_v2.pkl")
 
 
 def get_device():
@@ -70,7 +72,14 @@ print(f"[train_v2] loss weights: recon={RECON_W} kl_dyn={KL_DYN_W} "
 
 
 def load_all_videos(video_dir="data/videos"):
-    """Load feature sequences from videos; fall back to synthetic data."""
+    """Load feature sequences from videos; cache to disk; synthetic fallback."""
+    if os.path.exists(CACHE_PATH) and not os.environ.get("REBUILD_CACHE"):
+        with open(CACHE_PATH, "rb") as f:
+            feats = pickle.load(f)
+        print(f"[train_v2] Loaded {len(feats)} cached feature sequences "
+              f"from {CACHE_PATH}")
+        return feats
+
     all_features = []
     video_files = []
     for root, _dirs, files in os.walk(video_dir):
@@ -91,17 +100,22 @@ def load_all_videos(video_dir="data/videos"):
             all_features.append(seq)
         return all_features
 
-    for path in video_files[:50]:
+    for path in sorted(video_files)[:50]:
         print(f"[train_v2] Processing {os.path.basename(path)}...")
         try:
             feats = process_video_to_features(path, max_frames=300)
             if len(feats) >= 32:
-                all_features.append(feats)
+                all_features.append(np.asarray(feats, dtype=np.float32))
                 print(f"  -> {len(feats)} frames")
         except Exception as e:  # noqa: BLE001
             print(f"  -> Error: {e}, skipping")
 
     print(f"[train_v2] Loaded {len(all_features)} videos")
+    if all_features:
+        os.makedirs(os.path.dirname(CACHE_PATH) or ".", exist_ok=True)
+        with open(CACHE_PATH, "wb") as f:
+            pickle.dump(all_features, f)
+        print(f"[train_v2] Cached features -> {CACHE_PATH}")
     return all_features
 
 
@@ -109,6 +123,16 @@ def train_world_model(features_list):
     model = CrowdWorldModelV2(
         hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS,
         transition_type=TRANSITION_TYPE).to(DEVICE)
+
+    # Standardize raw flow features (carried as checkpoint buffers). Without
+    # this, recon MSE on raw RAFT magnitudes dwarfs the KL/dynamics terms.
+    all_frames = np.concatenate(
+        [np.asarray(s, dtype=np.float32) for s in features_list], axis=0)
+    model.set_feature_stats(all_frames.mean(0), all_frames.std(0))
+    print(f"[train_v2] feature stats set on {all_frames.shape[0]} frames "
+          f"(mean|{np.abs(all_frames.mean(0)).mean():.3f}| "
+          f"std~{all_frames.std(0).mean():.3f})")
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=EPOCHS, eta_min=1e-5)
@@ -145,8 +169,9 @@ def train_world_model(features_list):
 
                 out = model.forward_train(x)
 
-                # Reconstruction (keep latent informative)
-                recon_loss = nn.MSELoss()(out["recon"], x)
+                # Reconstruction in STANDARDIZED space (decoder reconstructs
+                # standardized features; target must be standardized too).
+                recon_loss = nn.MSELoss()(out["recon"], model.standardize(x))
 
                 # Dynamics: KL( posterior_t || prior_t ), t = 1..T.
                 # prior predicts steps 1..T from z_<t.
