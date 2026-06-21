@@ -64,6 +64,61 @@ At the end of the pipeline, a **multi-agent decision framework** fuses every sig
 
 ---
 
+## Dataset
+
+The world model and the RAFT fine-tuning are trained on a small set of **publicly available YouTube clips of crowds walking and moving** — stadium crowds, pedestrian flows, and crowd-dynamics demonstrations. The clips live in `data/videos/` and are loaded directly by the training scripts (`scripts/train.py`, `scripts/finetune_raft.py`).
+
+Two things to note:
+
+- **No labels, no disaster footage.** Training is entirely **self-supervised** on *normal* crowd motion — the model only ever learns what calm looks like, and danger is inferred as deviation ("surprise") from that. Real crush footage is scarce and ethically fraught, so none is used.
+- **Intentionally small (hackathon scope).** A handful of clips is enough to demonstrate the pipeline and recover physics via the latent probe, but it's also why held-out generalization is modest — broader, more varied footage is the obvious next step.
+
+To use your own data, drop `.mp4` / `.avi` / `.mov` files into `data/videos/` and re-run the training scripts below.
+
+---
+
+## Model results
+
+All numbers are reproducible from the scripts in `scripts/` and the JSON artifacts in `results/`.
+
+### Latent probe — did the world model learn physics?
+
+We freeze the shipped world model (v1), encode crowd video into the 64-d latent, and fit a probe from the latent to each *measured* physics quantity. High R² means the concept is linearly recoverable from the latent the model built on its own.
+
+| Concept | R² (linear, in-sample) | R² (held-out, group k-fold) |
+| --- | --- | --- |
+| Crowd velocity | 0.83 | 0.54 |
+| Turbulence | 0.78 | 0.33 |
+| Backward pressure | 0.84 | 0.56 |
+| **Boundary stress** (the literal mechanism of a crush) | **0.94** | 0.26 |
+
+Plus the unexplained latent dimensions still separate pre-anomaly frames from calm ones by **1.56σ** — early-warning signal the model encodes that we don't yet have names for. The in-sample numbers show the concept *is* represented; the held-out numbers are honest about how much generalizes from this small dataset. *(Source: `results/probe_results.json`, `scripts/probe_latent.py`.)*
+
+### Model selection — v1 vs RSSM v2
+
+We built a Dreamer/RSSM-style v2 and compared it to v1 on a combined probe + surprise-separation score. **v1 won and shipped.**
+
+| Model | Mean linear-probe R² | Surprise separation | Combined score |
+| --- | --- | --- | --- |
+| **v1 (shipped)** | 0.85 | **1.56σ** | **1.63** |
+| RSSM v2 | 0.87 | 1.25σ | 1.49 |
+
+*(Source: `results/probe_compare_results.json`, `scripts/probe_compare.py`.)*
+
+### Training curves (selected models)
+
+**World model (v1, shipped)** — self-supervised loss (reconstruction + KL + transition) converging to ≈ **0.045** under cosine LR decay:
+
+![World model training loss](results/world_model_training.png)
+
+**Intervention RL (Dyna + Conservative Q-Learning)** — trained entirely in the world model's imagination. Over 15k imagined episodes the 50-episode average reward climbs to ≈ **62** (best ≈ 68) as the TD/CQL loss decays and ε anneals:
+
+![RL policy training curves](results/rl_policy_training.png)
+
+*(Curves written live by `metrics_logger.py`; sources in `logs/`.)*
+
+---
+
 ## Getting started
 
 ### Prerequisites
