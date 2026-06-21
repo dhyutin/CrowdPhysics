@@ -153,10 +153,13 @@ def smoothness_loss(flow):
 
 def finetune_raft(video_dir="data/videos",
                   output_path="models/raft_crowd.pt",
-                  epochs=30,
-                  batch_size=4,
-                  lr=1e-4,
-                  smooth_weight=0.1):
+                  epochs=80,
+                  batch_size=12,
+                  lr=3e-4,
+                  smooth_weight=0.1,
+                  weight_decay=1e-5,
+                  pct_start=0.1,
+                  max_pairs_per_video=400):
 
     os.makedirs("models", exist_ok=True)
 
@@ -176,15 +179,12 @@ def finetune_raft(video_dir="data/videos",
 
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
-        lr=lr, weight_decay=1e-5
-    )
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=lr,
-        steps_per_epoch=1, epochs=epochs
+        lr=lr, weight_decay=weight_decay
     )
 
     # Dataset
-    dataset = CrowdFramePairDataset(video_dir=video_dir)
+    dataset = CrowdFramePairDataset(video_dir=video_dir,
+                                    max_pairs_per_video=max_pairs_per_video)
     if len(dataset) == 0:
         print("No video pairs found. Check data/videos/")
         return
@@ -192,9 +192,23 @@ def finetune_raft(video_dir="data/videos",
     loader = DataLoader(dataset, batch_size=batch_size,
                         shuffle=True, num_workers=0, drop_last=True)
 
+    steps_per_epoch = max(1, len(loader))
+    total_steps = steps_per_epoch * epochs
+    # Proper one-cycle schedule: warm up then cosine-anneal across ALL steps
+    # (the previous per-epoch stepping barely moved the LR).
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=lr,
+        total_steps=total_steps,
+        pct_start=pct_start, anneal_strategy="cos",
+        div_factor=10.0, final_div_factor=100.0,
+    )
+
     best_loss = float('inf')
     print(f"\n{'='*50}")
     print("RAFT FINE-TUNING")
+    print(f"  epochs={epochs}  batch_size={batch_size}  max_lr={lr}")
+    print(f"  steps/epoch={steps_per_epoch}  total_steps={total_steps}")
+    print(f"  smooth_weight={smooth_weight}  weight_decay={weight_decay}")
     print(f"{'='*50}")
 
     for epoch in range(epochs):
@@ -232,23 +246,29 @@ def finetune_raft(video_dir="data/videos",
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+            scheduler.step()
 
             total_loss += loss.item()
             n_batches += 1
 
-        scheduler.step()
         avg = total_loss / max(1, n_batches)
+        cur_lr = scheduler.get_last_lr()[0]
 
         if avg < best_loss:
             best_loss = avg
             torch.save(model.state_dict(), output_path)
 
-        if epoch % 5 == 0 or epoch == epochs - 1:
-            print(f"  Epoch {epoch:3d}/{epochs} | "
-                  f"Loss: {avg:.5f} | Best: {best_loss:.5f}")
+        print(f"  Epoch {epoch:3d}/{epochs} | "
+              f"Loss: {avg:.5f} | Best: {best_loss:.5f} | lr: {cur_lr:.2e}",
+              flush=True)
+
+    # Always keep a copy of the final-epoch weights alongside the best.
+    final_path = output_path.replace(".pt", "_final.pt")
+    torch.save(model.state_dict(), final_path)
 
     print(f"\n✓ RAFT fine-tuning done. Best loss: {best_loss:.5f}")
-    print(f"  Saved: {output_path}")
+    print(f"  Saved best:  {output_path}")
+    print(f"  Saved final: {final_path}")
     print("  train.py will now use fine-tuned RAFT automatically.")
 
 
@@ -256,6 +276,6 @@ if __name__ == "__main__":
     finetune_raft(
         video_dir="data/videos",
         output_path="models/raft_crowd.pt",
-        epochs=30,
-        batch_size=4 if DEVICE.type == "cuda" else 2,
+        epochs=80,
+        batch_size=12 if DEVICE.type == "cuda" else 2,
     )
