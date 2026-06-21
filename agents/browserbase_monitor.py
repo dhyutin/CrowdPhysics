@@ -17,14 +17,80 @@ Run:
 from __future__ import annotations
 
 import os
+import re
 import time
 
 import numpy as np
 import requests
 
-BB_KEY = os.environ.get("BROWSERBASE_API_KEY", "")
-BB_PROJECT = os.environ.get("BROWSERBASE_PROJECT_ID", "")
 BB_BASE = "https://api.browserbase.com/v1"
+
+
+def _creds() -> tuple[str, str]:
+    """Read Browserbase credentials at call time (after .env is loaded)."""
+    return (
+        os.environ.get("BROWSERBASE_API_KEY", ""),
+        os.environ.get("BROWSERBASE_PROJECT_ID", ""),
+    )
+
+
+# ── URL NORMALIZATION ─────────────────────────────────────────────────────────
+
+# Extract an 11-char YouTube video id from the common URL shapes:
+#   youtube.com/watch?v=ID   youtu.be/ID   /shorts/ID   /live/ID   /embed/ID
+_YT_ID_PATTERNS = [
+    re.compile(r"[?&]v=([A-Za-z0-9_-]{11})"),
+    re.compile(r"youtu\.be/([A-Za-z0-9_-]{11})"),
+    re.compile(r"/shorts/([A-Za-z0-9_-]{11})"),
+    re.compile(r"/live/([A-Za-z0-9_-]{11})"),
+    re.compile(r"/embed/([A-Za-z0-9_-]{11})"),
+]
+
+
+def normalize_stream_url(url: str) -> str:
+    """
+    Rewrite a YouTube watch/share/shorts/live link into the privacy-enhanced
+    embed player URL. The embed player plays public videos with autoplay and
+    NO sign-in / "confirm you're not a bot" wall, which is what blocks the
+    raw watch page inside a cloud browser. Non-YouTube URLs are returned as-is.
+    """
+    if not url or "youtu" not in url.lower():
+        return url
+    vid = None
+    for pat in _YT_ID_PATTERNS:
+        m = pat.search(url)
+        if m:
+            vid = m.group(1)
+            break
+    if not vid:
+        return url
+    # youtube-nocookie avoids the cookie-consent redirect; mute=1 is required
+    # for autoplay to be allowed by the browser.
+    return (
+        f"https://www.youtube-nocookie.com/embed/{vid}"
+        "?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1"
+    )
+
+
+def _dismiss_consent(page) -> None:
+    """Best-effort: click through any cookie / consent dialog."""
+    selectors = [
+        "button[aria-label*='Accept all' i]",
+        "button[aria-label*='Accept the use' i]",
+        "button[aria-label*='Reject all' i]",
+        "form[action*='consent'] button",
+        "button:has-text('Accept all')",
+        "button:has-text('I agree')",
+    ]
+    for sel in selectors:
+        try:
+            el = page.query_selector(sel)
+            if el:
+                el.click(timeout=1500)
+                time.sleep(0.5)
+                return
+        except Exception:
+            continue
 
 
 def create_session(keep_alive: bool = False) -> dict:
@@ -34,13 +100,14 @@ def create_session(keep_alive: bool = False) -> dict:
     keep_alive=True keeps the session running after the automation client
     disconnects — required so a live-view URL stays valid for embedding.
     """
-    body: dict = {"projectId": BB_PROJECT}
+    key, project = _creds()
+    body: dict = {"projectId": project}
     if keep_alive:
         body["keepAlive"] = True
     r = requests.post(
         f"{BB_BASE}/sessions",
         headers={
-            "x-bb-api-key": BB_KEY,
+            "x-bb-api-key": key,
             "Content-Type": "application/json",
         },
         json=body,
@@ -52,22 +119,24 @@ def create_session(keep_alive: bool = False) -> dict:
 
 def end_session(session_id: str) -> None:
     """Release a Browserbase session."""
+    key, project = _creds()
     requests.post(
         f"{BB_BASE}/sessions/{session_id}",
         headers={
-            "x-bb-api-key": BB_KEY,
+            "x-bb-api-key": key,
             "Content-Type": "application/json",
         },
-        json={"projectId": BB_PROJECT, "status": "REQUEST_RELEASE"},
+        json={"projectId": project, "status": "REQUEST_RELEASE"},
         timeout=30,
     )
 
 
 def session_debug(session_id: str) -> dict:
     """Fetch a session's live-view URLs (debuggerFullscreenUrl, pages, ...)."""
+    key, _ = _creds()
     r = requests.get(
         f"{BB_BASE}/sessions/{session_id}/debug",
-        headers={"x-bb-api-key": BB_KEY},
+        headers={"x-bb-api-key": key},
         timeout=30,
     )
     r.raise_for_status()
@@ -94,9 +163,11 @@ def start_live_session(url: str, viewport=(1280, 720),
     """
     from playwright.sync_api import sync_playwright
 
-    if not BB_KEY or not BB_PROJECT:
+    if not all(_creds()):
         raise RuntimeError(
             "BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
+
+    url = normalize_stream_url(url)
 
     # keepAlive so the session survives the Playwright disconnect below and
     # the live-view URL stays valid for embedding in the frontend.
@@ -120,6 +191,7 @@ def start_live_session(url: str, viewport=(1280, 720),
             page.goto(url, wait_until="domcontentloaded",
                       timeout=nav_timeout_ms)
             time.sleep(2.0)
+            _dismiss_consent(page)
             _try_start_playback(page)
             # Intentionally NOT calling browser.close().
     except Exception:
@@ -193,10 +265,11 @@ def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
     import cv2
     from playwright.sync_api import sync_playwright
 
-    if not BB_KEY or not BB_PROJECT:
+    if not all(_creds()):
         raise RuntimeError(
             "BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID not set")
 
+    url = normalize_stream_url(url)
     own_session = connect_url is None
     sid_to_release: str | None = None
     if own_session:
@@ -223,6 +296,7 @@ def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
                     page.goto(url, wait_until="domcontentloaded",
                               timeout=nav_timeout_ms)
                     time.sleep(settle_s)
+                    _dismiss_consent(page)
                     _try_start_playback(page)
                     time.sleep(1.0)
                 else:
@@ -253,7 +327,7 @@ def capture_frames(url: str, n_frames: int = 45, interval_s: float = 0.4,
 if __name__ == "__main__":
     import sys
 
-    if not BB_KEY or not BB_PROJECT:
+    if not all(_creds()):
         print(
             "Set BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID "
             "to use Browserbase monitoring."

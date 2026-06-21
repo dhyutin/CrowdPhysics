@@ -1,0 +1,631 @@
+[train_v2] Device: cuda
+[train_v2] transition=lstm hidden=512 layers=3 | epochs=1500 seq_len=40 lr=0.0005 batch=8
+[train_v2] loss weights: recon=0.3 kl_dyn=1.0 kl_reg=0.005 free_bits=0.0 trans_mse=1.0
+[train_v2] Loaded 9 cached feature sequences from data/features_cache_v2.pkl
+[train_v2] feature stats set on 2435 frames (mean|14.114| std~74.016)
+/usr/lib/python3/dist-packages/scipy/__init__.py:146: UserWarning: A NumPy version >=1.17.3 and <1.25.0 is required for this version of SciPy (detected version 1.26.4
+  warnings.warn(f"A NumPy version >={np_minversion} and <{np_maxversion}"
+[metrics] run 'world_model_v2_20260621_052133' → logs/world_model_v2_20260621_052133/
+
+==================================================
+WORLD MODEL v2 TRAINING (proper VAE)
+==================================================
+  Epoch    0/1500 | Loss 1.53170 | Best 1.53170 | recon 0.9105 | kl_dyn 0.2620 | kl_reg 0.3065
+  Epoch    5/1500 | Loss 1.32698 | Best 1.32042 | recon 1.0188 | kl_dyn 0.0216 | kl_reg 0.1073
+  Epoch   10/1500 | Loss 1.38766 | Best 1.17898 | recon 1.2309 | kl_dyn 0.0089 | kl_reg 0.0866
+  Epoch   15/1500 | Loss 1.26504 | Best 1.17898 | recon 0.8541 | kl_dyn 0.0047 | kl_reg 0.0726
+  Epoch   20/1500 | Loss 1.28943 | Best 1.17898 | recon 0.9253 | kl_dyn 0.0048 | kl_reg 0.0675
+  Epoch   25/1500 | Loss 1.34709 | Best 1.17898 | recon 1.1184 | kl_dyn 0.0087 | kl_reg 0.0636
+  Epoch   30/1500 | Loss 1.36283 | Best 1.17898 | recon 1.1803 | kl_dyn 0.0026 | kl_reg 0.0542
+  Epoch   35/1500 | Loss 1.31782 | Best 1.17898 | recon 1.0533 | kl_dyn 0.0013 | kl_reg 0.0453
+  Epoch   40/1500 | Loss 1.21308 | Best 1.17898 | recon 0.6873 | kl_dyn 0.0010 | kl_reg 0.0365
+  Epoch   45/1500 | Loss 1.33082 | Best 1.17898 | recon 1.0774 | kl_dyn 0.0030 | kl_reg 0.0342
+  Epoch   50/1500 | Loss 1.34176 | Best 1.17898 | recon 1.1375 | kl_dyn 0.0021 | kl_reg 0.0313
+  Epoch   55/1500 | Loss 1.35381 | Best 1.17898 | recon 1.1344 | kl_dyn 0.0026 | kl_reg 0.0289
+  Epoch   60/1500 | Loss 1.27478 | Best 1.17898 | recon 0.8365 | kl_dyn 0.0064 | kl_reg 0.0395
+  Epoch   65/1500 | Loss 1.28142 | Best 1.17898 | recon 0.9244 | kl_dyn 0.0008 | kl_reg 0.0320
+  Epoch   70/1500 | Loss 1.36302 | Best 1.17898 | recon 1.1789 | kl_dyn 0.0015 | kl_reg 0.0249
+  Epoch   75/1500 | Loss 1.35759 | Best 1.17898 | recon 1.1432 | kl_dyn 0.0008 | kl_reg 0.0220
+  Epoch   80/1500 | Loss 1.18966 | Best 1.17898 | recon 0.5973 | kl_dyn 0.0008 | kl_reg 0.0220
+  Epoch   85/1500 | Loss 1.30252 | Best 1.17898 | recon 0.9796 | kl_dyn 0.0006 | kl_reg 0.0145
+  Epoch   90/1500 | Loss 1.18100 | Best 1.17898 | recon 0.5752 | kl_dyn 0.0009 | kl_reg 0.0144
+  Epoch   95/1500 | Loss 1.23810 | Best 1.17898 | recon 0.7726 | kl_dyn 0.0011 | kl_reg 0.0143
+  Epoch  100/1500 | Loss 1.29062 | Best 1.17898 | recon 0.9507 | kl_dyn 0.0011 | kl_reg 0.0142
+  Epoch  105/1500 | Loss 1.30653 | Best 1.17046 | recon 1.0169 | kl_dyn 0.0044 | kl_reg 0.0172
+  Epoch  110/1500 | Loss 1.29621 | Best 1.17046 | recon 0.9702 | kl_dyn 0.0020 | kl_reg 0.0160
+  Epoch  115/1500 | Loss 1.27835 | Best 1.17046 | recon 0.9276 | kl_dyn 0.0014 | kl_reg 0.0187
+  Epoch  120/1500 | Loss 1.27418 | Best 1.17046 | recon 0.9110 | kl_dyn 0.0010 | kl_reg 0.0176
+  Epoch  125/1500 | Loss 1.27503 | Best 1.17046 | recon 0.9136 | kl_dyn 0.0003 | kl_reg 0.0161
+  Epoch  130/1500 | Loss 1.28161 | Best 1.17046 | recon 0.9058 | kl_dyn 0.0006 | kl_reg 0.0167
+  Epoch  135/1500 | Loss 1.36550 | Best 1.17046 | recon 1.2057 | kl_dyn 0.0005 | kl_reg 0.0154
+  Epoch  140/1500 | Loss 1.21104 | Best 1.17046 | recon 0.6759 | kl_dyn 0.0011 | kl_reg 0.0145
+  Epoch  145/1500 | Loss 1.36419 | Best 1.17046 | recon 1.1927 | kl_dyn 0.0005 | kl_reg 0.0129
+  Epoch  150/1500 | Loss 1.20362 | Best 1.17046 | recon 0.6449 | kl_dyn 0.0013 | kl_reg 0.0156
+  Epoch  155/1500 | Loss 1.21937 | Best 1.17046 | recon 0.7408 | kl_dyn 0.0004 | kl_reg 0.0155
+  Epoch  160/1500 | Loss 1.24457 | Best 1.17046 | recon 0.7863 | kl_dyn 0.0010 | kl_reg 0.0175
+  Epoch  165/1500 | Loss 1.38254 | Best 1.17046 | recon 1.2571 | kl_dyn 0.0003 | kl_reg 0.0194
+  Epoch  170/1500 | Loss 1.31561 | Best 1.17046 | recon 1.0481 | kl_dyn 0.0004 | kl_reg 0.0170
+  Epoch  175/1500 | Loss 1.29144 | Best 1.16307 | recon 0.9455 | kl_dyn 0.0003 | kl_reg 0.0177
+  Epoch  180/1500 | Loss 1.26333 | Best 1.16307 | recon 0.8482 | kl_dyn 0.0002 | kl_reg 0.0151
+  Epoch  185/1500 | Loss 1.33342 | Best 1.16307 | recon 1.0887 | kl_dyn 0.0004 | kl_reg 0.0147
+  Epoch  190/1500 | Loss 1.27803 | Best 1.16307 | recon 0.9301 | kl_dyn 0.0005 | kl_reg 0.0121
+  Epoch  195/1500 | Loss 1.41109 | Best 1.16307 | recon 1.3478 | kl_dyn 0.0003 | kl_reg 0.0127
+  Epoch  200/1500 | Loss 1.31561 | Best 1.16307 | recon 1.0381 | kl_dyn 0.0008 | kl_reg 0.0121
+  Epoch  205/1500 | Loss 1.24633 | Best 1.16307 | recon 0.8288 | kl_dyn 0.0008 | kl_reg 0.0111
+  Epoch  210/1500 | Loss 1.30410 | Best 1.16307 | recon 1.0238 | kl_dyn 0.0008 | kl_reg 0.0101
+  Epoch  215/1500 | Loss 1.28133 | Best 1.16307 | recon 0.9432 | kl_dyn 0.0004 | kl_reg 0.0101
+  Epoch  220/1500 | Loss 1.18662 | Best 1.16307 | recon 0.6168 | kl_dyn 0.0001 | kl_reg 0.0087
+  Epoch  225/1500 | Loss 1.23781 | Best 1.16307 | recon 0.7770 | kl_dyn 0.0002 | kl_reg 0.0110
+  Epoch  230/1500 | Loss 1.24771 | Best 1.16307 | recon 0.8037 | kl_dyn 0.0001 | kl_reg 0.0094
+  Epoch  235/1500 | Loss 1.25379 | Best 1.16307 | recon 0.8490 | kl_dyn 0.0002 | kl_reg 0.0125
+  Epoch  240/1500 | Loss 1.35860 | Best 1.16307 | recon 1.1917 | kl_dyn 0.0011 | kl_reg 0.0132
+  Epoch  245/1500 | Loss 1.23668 | Best 1.16307 | recon 0.7877 | kl_dyn 0.0004 | kl_reg 0.0120
+  Epoch  250/1500 | Loss 1.22599 | Best 1.16307 | recon 0.7574 | kl_dyn 0.0003 | kl_reg 0.0138
+  Epoch  255/1500 | Loss 1.28504 | Best 1.16307 | recon 0.9551 | kl_dyn 0.0003 | kl_reg 0.0138
+  Epoch  260/1500 | Loss 1.27212 | Best 1.16307 | recon 0.8782 | kl_dyn 0.0001 | kl_reg 0.0140
+  Epoch  265/1500 | Loss 1.25367 | Best 1.15581 | recon 0.8371 | kl_dyn 0.0001 | kl_reg 0.0143
+  Epoch  270/1500 | Loss 1.32532 | Best 1.15581 | recon 1.0971 | kl_dyn 0.0002 | kl_reg 0.0145
+  Epoch  275/1500 | Loss 1.20184 | Best 1.15581 | recon 0.6504 | kl_dyn 0.0001 | kl_reg 0.0165
+  Epoch  280/1500 | Loss 1.28269 | Best 1.15581 | recon 0.9439 | kl_dyn 0.0002 | kl_reg 0.0139
+  Epoch  285/1500 | Loss 1.31148 | Best 1.15581 | recon 1.0021 | kl_dyn 0.0002 | kl_reg 0.0122
+  Epoch  290/1500 | Loss 1.20549 | Best 1.15581 | recon 0.6812 | kl_dyn 0.0001 | kl_reg 0.0128
+  Epoch  295/1500 | Loss 1.32837 | Best 1.15581 | recon 1.1271 | kl_dyn 0.0003 | kl_reg 0.0110
+  Epoch  300/1500 | Loss 1.20448 | Best 1.15581 | recon 0.6636 | kl_dyn 0.0001 | kl_reg 0.0113
+  Epoch  305/1500 | Loss 1.23702 | Best 1.15581 | recon 0.7914 | kl_dyn 0.0002 | kl_reg 0.0114
+  Epoch  310/1500 | Loss 1.19445 | Best 1.15581 | recon 0.6185 | kl_dyn 0.0001 | kl_reg 0.0102
+  Epoch  315/1500 | Loss 1.23470 | Best 1.15581 | recon 0.7468 | kl_dyn 0.0002 | kl_reg 0.0115
+  Epoch  320/1500 | Loss 1.27960 | Best 1.15581 | recon 0.9298 | kl_dyn 0.0001 | kl_reg 0.0119
+  Epoch  325/1500 | Loss 1.21879 | Best 1.15581 | recon 0.7283 | kl_dyn 0.0001 | kl_reg 0.0115
+  Epoch  330/1500 | Loss 1.27118 | Best 1.15581 | recon 0.9022 | kl_dyn 0.0002 | kl_reg 0.0100
+  Epoch  335/1500 | Loss 1.37274 | Best 1.15581 | recon 1.2245 | kl_dyn 0.0002 | kl_reg 0.0087
+  Epoch  340/1500 | Loss 1.31157 | Best 1.15581 | recon 1.0505 | kl_dyn 0.0005 | kl_reg 0.0092
+  Epoch  345/1500 | Loss 1.34006 | Best 1.15581 | recon 1.1498 | kl_dyn 0.0004 | kl_reg 0.0083
+  Epoch  350/1500 | Loss 1.32728 | Best 1.15581 | recon 1.0650 | kl_dyn 0.0004 | kl_reg 0.0080
+  Epoch  355/1500 | Loss 1.34195 | Best 1.15581 | recon 1.1370 | kl_dyn 0.0002 | kl_reg 0.0083
+  Epoch  360/1500 | Loss 1.23258 | Best 1.15581 | recon 0.7715 | kl_dyn 0.0001 | kl_reg 0.0079
+  Epoch  365/1500 | Loss 1.31510 | Best 1.15581 | recon 1.0496 | kl_dyn 0.0000 | kl_reg 0.0073
+  Epoch  370/1500 | Loss 1.34934 | Best 1.15581 | recon 1.1441 | kl_dyn 0.0001 | kl_reg 0.0097
+  Epoch  375/1500 | Loss 1.30607 | Best 1.15581 | recon 1.0083 | kl_dyn 0.0001 | kl_reg 0.0092
+  Epoch  380/1500 | Loss 1.19334 | Best 1.15581 | recon 0.6337 | kl_dyn 0.0001 | kl_reg 0.0095
+  Epoch  385/1500 | Loss 1.32171 | Best 1.15581 | recon 1.0836 | kl_dyn 0.0001 | kl_reg 0.0092
+  Epoch  390/1500 | Loss 1.31745 | Best 1.15581 | recon 1.0728 | kl_dyn 0.0002 | kl_reg 0.0097
+  Epoch  395/1500 | Loss 1.39797 | Best 1.15581 | recon 1.3265 | kl_dyn 0.0001 | kl_reg 0.0080
+  Epoch  400/1500 | Loss 1.22188 | Best 1.15581 | recon 0.7524 | kl_dyn 0.0001 | kl_reg 0.0097
+  Epoch  405/1500 | Loss 1.27070 | Best 1.15581 | recon 0.9169 | kl_dyn 0.0002 | kl_reg 0.0098
+  Epoch  410/1500 | Loss 1.26560 | Best 1.15581 | recon 0.9327 | kl_dyn 0.0009 | kl_reg 0.0086
+  Epoch  415/1500 | Loss 1.21398 | Best 1.15581 | recon 0.7182 | kl_dyn 0.0003 | kl_reg 0.0073
+  Epoch  420/1500 | Loss 1.27781 | Best 1.15581 | recon 0.9081 | kl_dyn 0.0001 | kl_reg 0.0057
+  Epoch  425/1500 | Loss 1.28824 | Best 1.13547 | recon 0.9867 | kl_dyn 0.0001 | kl_reg 0.0071
+  Epoch  430/1500 | Loss 1.30113 | Best 1.13547 | recon 1.0233 | kl_dyn 0.0000 | kl_reg 0.0060
+  Epoch  435/1500 | Loss 1.33620 | Best 1.13547 | recon 1.1053 | kl_dyn 0.0000 | kl_reg 0.0079
+  Epoch  440/1500 | Loss 1.29110 | Best 1.13547 | recon 0.9709 | kl_dyn 0.0001 | kl_reg 0.0108
+  Epoch  445/1500 | Loss 1.27091 | Best 1.13547 | recon 0.9047 | kl_dyn 0.0001 | kl_reg 0.0094
+  Epoch  450/1500 | Loss 1.39037 | Best 1.13547 | recon 1.2775 | kl_dyn 0.0000 | kl_reg 0.0104
+  Epoch  455/1500 | Loss 1.31005 | Best 1.13547 | recon 1.0374 | kl_dyn 0.0001 | kl_reg 0.0086
+  Epoch  460/1500 | Loss 1.28166 | Best 1.13547 | recon 0.9577 | kl_dyn 0.0001 | kl_reg 0.0077
+  Epoch  465/1500 | Loss 1.22262 | Best 1.13547 | recon 0.7489 | kl_dyn 0.0000 | kl_reg 0.0070
+  Epoch  470/1500 | Loss 1.24019 | Best 1.13547 | recon 0.8259 | kl_dyn 0.0001 | kl_reg 0.0065
+  Epoch  475/1500 | Loss 1.30536 | Best 1.13547 | recon 1.0158 | kl_dyn 0.0001 | kl_reg 0.0071
+  Epoch  480/1500 | Loss 1.27399 | Best 1.13547 | recon 0.9188 | kl_dyn 0.0000 | kl_reg 0.0065
+  Epoch  485/1500 | Loss 1.23334 | Best 1.13210 | recon 0.7588 | kl_dyn 0.0000 | kl_reg 0.0074
+  Epoch  490/1500 | Loss 1.27013 | Best 1.13210 | recon 0.9066 | kl_dyn 0.0000 | kl_reg 0.0070
+  Epoch  495/1500 | Loss 1.31720 | Best 1.13210 | recon 1.0364 | kl_dyn 0.0001 | kl_reg 0.0075
+  Epoch  500/1500 | Loss 1.23005 | Best 1.13210 | recon 0.7727 | kl_dyn 0.0000 | kl_reg 0.0064
+  Epoch  505/1500 | Loss 1.29975 | Best 1.13210 | recon 1.0062 | kl_dyn 0.0001 | kl_reg 0.0068
+  Epoch  510/1500 | Loss 1.35776 | Best 1.13210 | recon 1.1912 | kl_dyn 0.0001 | kl_reg 0.0071
+  Epoch  515/1500 | Loss 1.44582 | Best 1.13210 | recon 1.4782 | kl_dyn 0.0000 | kl_reg 0.0069
+  Epoch  520/1500 | Loss 1.31177 | Best 1.13210 | recon 1.0502 | kl_dyn 0.0000 | kl_reg 0.0061
+  Epoch  525/1500 | Loss 1.21327 | Best 1.13210 | recon 0.6853 | kl_dyn 0.0001 | kl_reg 0.0054
+  Epoch  530/1500 | Loss 1.23736 | Best 1.13210 | recon 0.8156 | kl_dyn 0.0001 | kl_reg 0.0051
+  Epoch  535/1500 | Loss 1.30671 | Best 1.13210 | recon 1.0332 | kl_dyn 0.0001 | kl_reg 0.0060
+  Epoch  540/1500 | Loss 1.33173 | Best 1.13210 | recon 1.1010 | kl_dyn 0.0001 | kl_reg 0.0061
+  Epoch  545/1500 | Loss 1.31637 | Best 1.13210 | recon 1.0242 | kl_dyn 0.0001 | kl_reg 0.0060
+  Epoch  550/1500 | Loss 1.26386 | Best 1.13210 | recon 0.8802 | kl_dyn 0.0000 | kl_reg 0.0067
+  Epoch  555/1500 | Loss 1.28196 | Best 1.13210 | recon 0.9397 | kl_dyn 0.0000 | kl_reg 0.0097
+  Epoch  560/1500 | Loss 1.28715 | Best 1.13210 | recon 1.0033 | kl_dyn 0.0000 | kl_reg 0.0079
+  Epoch  565/1500 | Loss 1.27839 | Best 1.13210 | recon 0.9406 | kl_dyn 0.0000 | kl_reg 0.0084
+  Epoch  570/1500 | Loss 1.40115 | Best 1.13210 | recon 1.3157 | kl_dyn 0.0001 | kl_reg 0.0098
+  Epoch  575/1500 | Loss 1.31747 | Best 1.13210 | recon 1.0495 | kl_dyn 0.0000 | kl_reg 0.0107
+  Epoch  580/1500 | Loss 1.24164 | Best 1.13210 | recon 0.8215 | kl_dyn 0.0000 | kl_reg 0.0084
+  Epoch  585/1500 | Loss 1.25497 | Best 1.13210 | recon 0.8546 | kl_dyn 0.0000 | kl_reg 0.0075
+  Epoch  590/1500 | Loss 1.31156 | Best 1.13210 | recon 1.0431 | kl_dyn 0.0001 | kl_reg 0.0087
+  Epoch  595/1500 | Loss 1.30914 | Best 1.13210 | recon 1.0309 | kl_dyn 0.0000 | kl_reg 0.0083
+  Epoch  600/1500 | Loss 1.21156 | Best 1.13210 | recon 0.7048 | kl_dyn 0.0000 | kl_reg 0.0086
+  Epoch  605/1500 | Loss 1.39498 | Best 1.13210 | recon 1.3025 | kl_dyn 0.0000 | kl_reg 0.0078
+  Epoch  610/1500 | Loss 1.29485 | Best 1.13210 | recon 1.0174 | kl_dyn 0.0000 | kl_reg 0.0061
+  Epoch  615/1500 | Loss 1.13952 | Best 1.13210 | recon 0.4700 | kl_dyn 0.0000 | kl_reg 0.0046
+  Epoch  620/1500 | Loss 1.41966 | Best 1.13210 | recon 1.3743 | kl_dyn 0.0000 | kl_reg 0.0050
+  Epoch  625/1500 | Loss 1.26361 | Best 1.13210 | recon 0.8679 | kl_dyn 0.0000 | kl_reg 0.0055
+  Epoch  630/1500 | Loss 1.36186 | Best 1.13210 | recon 1.1905 | kl_dyn 0.0000 | kl_reg 0.0064
+  Epoch  635/1500 | Loss 1.36917 | Best 1.13210 | recon 1.2155 | kl_dyn 0.0001 | kl_reg 0.0086
+  Epoch  640/1500 | Loss 1.36546 | Best 1.13210 | recon 1.2034 | kl_dyn 0.0001 | kl_reg 0.0087
+  Epoch  645/1500 | Loss 1.14892 | Best 1.13210 | recon 0.5043 | kl_dyn 0.0000 | kl_reg 0.0080
+  Epoch  650/1500 | Loss 1.38845 | Best 1.13210 | recon 1.2880 | kl_dyn 0.0000 | kl_reg 0.0070
+  Epoch  655/1500 | Loss 1.26552 | Best 1.13210 | recon 0.8829 | kl_dyn 0.0000 | kl_reg 0.0063
+  Epoch  660/1500 | Loss 1.28205 | Best 1.13210 | recon 0.9643 | kl_dyn 0.0000 | kl_reg 0.0063
+  Epoch  665/1500 | Loss 1.28667 | Best 1.13210 | recon 0.9552 | kl_dyn 0.0000 | kl_reg 0.0076
+  Epoch  670/1500 | Loss 1.25978 | Best 1.13210 | recon 0.8560 | kl_dyn 0.0000 | kl_reg 0.0066
+  Epoch  675/1500 | Loss 1.23041 | Best 1.13210 | recon 0.7610 | kl_dyn 0.0000 | kl_reg 0.0059
+  Epoch  680/1500 | Loss 1.25491 | Best 1.13210 | recon 0.8638 | kl_dyn 0.0000 | kl_reg 0.0059
+  Epoch  685/1500 | Loss 1.22103 | Best 1.13210 | recon 0.7774 | kl_dyn 0.0000 | kl_reg 0.0067
+  Epoch  690/1500 | Loss 1.33813 | Best 1.13210 | recon 1.1290 | kl_dyn 0.0000 | kl_reg 0.0068
+  Epoch  695/1500 | Loss 1.34488 | Best 1.13210 | recon 1.1620 | kl_dyn 0.0000 | kl_reg 0.0063
+  Epoch  700/1500 | Loss 1.39131 | Best 1.13210 | recon 1.3227 | kl_dyn 0.0000 | kl_reg 0.0054
+  Epoch  705/1500 | Loss 1.26476 | Best 1.13210 | recon 0.8815 | kl_dyn 0.0000 | kl_reg 0.0053
+  Epoch  710/1500 | Loss 1.34386 | Best 1.13210 | recon 1.1385 | kl_dyn 0.0000 | kl_reg 0.0057
+  Epoch  715/1500 | Loss 1.26869 | Best 1.13210 | recon 0.8905 | kl_dyn 0.0000 | kl_reg 0.0056
+  Epoch  720/1500 | Loss 1.19511 | Best 1.13210 | recon 0.6214 | kl_dyn 0.0000 | kl_reg 0.0062
+  Epoch  725/1500 | Loss 1.25123 | Best 1.13210 | recon 0.8175 | kl_dyn 0.0000 | kl_reg 0.0064
+  Epoch  730/1500 | Loss 1.20688 | Best 1.13210 | recon 0.6740 | kl_dyn 0.0000 | kl_reg 0.0078
+  Epoch  735/1500 | Loss 1.39198 | Best 1.13210 | recon 1.2964 | kl_dyn 0.0000 | kl_reg 0.0077
+  Epoch  740/1500 | Loss 1.22771 | Best 1.13210 | recon 0.7791 | kl_dyn 0.0000 | kl_reg 0.0066
+  Epoch  745/1500 | Loss 1.36365 | Best 1.13210 | recon 1.2056 | kl_dyn 0.0000 | kl_reg 0.0063
+  Epoch  750/1500 | Loss 1.23914 | Best 1.13210 | recon 0.7900 | kl_dyn 0.0000 | kl_reg 0.0052
+  Epoch  755/1500 | Loss 1.35714 | Best 1.13210 | recon 1.1715 | kl_dyn 0.0000 | kl_reg 0.0046
+  Epoch  760/1500 | Loss 1.34864 | Best 1.13210 | recon 1.1397 | kl_dyn 0.0000 | kl_reg 0.0050
+  Epoch  765/1500 | Loss 1.25559 | Best 1.13210 | recon 0.8459 | kl_dyn 0.0000 | kl_reg 0.0052
+  Epoch  770/1500 | Loss 1.24263 | Best 1.13210 | recon 0.8081 | kl_dyn 0.0000 | kl_reg 0.0061
+  Epoch  775/1500 | Loss 1.31878 | Best 1.13210 | recon 1.0470 | kl_dyn 0.0000 | kl_reg 0.0056
+  Epoch  780/1500 | Loss 1.39236 | Best 1.13210 | recon 1.3005 | kl_dyn 0.0000 | kl_reg 0.0060
+  Epoch  785/1500 | Loss 1.31463 | Best 1.13210 | recon 1.0502 | kl_dyn 0.0000 | kl_reg 0.0054
+  Epoch  790/1500 | Loss 1.36891 | Best 1.13210 | recon 1.2153 | kl_dyn 0.0000 | kl_reg 0.0052
+  Epoch  795/1500 | Loss 1.25975 | Best 1.13210 | recon 0.8642 | kl_dyn 0.0000 | kl_reg 0.0058
+  Epoch  800/1500 | Loss 1.26232 | Best 1.13210 | recon 0.8927 | kl_dyn 0.0000 | kl_reg 0.0052
+  Epoch  805/1500 | Loss 1.31444 | Best 1.13210 | recon 1.0569 | kl_dyn 0.0000 | kl_reg 0.0046
+  Epoch  810/1500 | Loss 1.27314 | Best 1.13210 | recon 0.9083 | kl_dyn 0.0000 | kl_reg 0.0042
+  Epoch  815/1500 | Loss 1.27013 | Best 1.13210 | recon 0.8756 | kl_dyn 0.0000 | kl_reg 0.0045
+  Epoch  820/1500 | Loss 1.26255 | Best 1.13210 | recon 0.8607 | kl_dyn 0.0000 | kl_reg 0.0045
+  Epoch  825/1500 | Loss 1.31533 | Best 1.13210 | recon 1.0356 | kl_dyn 0.0000 | kl_reg 0.0041
+  Epoch  830/1500 | Loss 1.21658 | Best 1.13210 | recon 0.7331 | kl_dyn 0.0000 | kl_reg 0.0039
+  Epoch  835/1500 | Loss 1.31395 | Best 1.13210 | recon 1.0154 | kl_dyn 0.0000 | kl_reg 0.0040
+  Epoch  840/1500 | Loss 1.34496 | Best 1.13210 | recon 1.1651 | kl_dyn 0.0000 | kl_reg 0.0042
+  Epoch  845/1500 | Loss 1.22008 | Best 1.13210 | recon 0.7400 | kl_dyn 0.0000 | kl_reg 0.0038
+  Epoch  850/1500 | Loss 1.28526 | Best 1.13210 | recon 0.9524 | kl_dyn 0.0000 | kl_reg 0.0039
+  Epoch  855/1500 | Loss 1.32304 | Best 1.13210 | recon 1.0551 | kl_dyn 0.0000 | kl_reg 0.0037
+  Epoch  860/1500 | Loss 1.27142 | Best 1.13210 | recon 0.9022 | kl_dyn 0.0000 | kl_reg 0.0039
+  Epoch  865/1500 | Loss 1.18655 | Best 1.13210 | recon 0.6374 | kl_dyn 0.0000 | kl_reg 0.0044
+  Epoch  870/1500 | Loss 1.22921 | Best 1.13210 | recon 0.7604 | kl_dyn 0.0000 | kl_reg 0.0050
+  Epoch  875/1500 | Loss 1.36661 | Best 1.13210 | recon 1.2100 | kl_dyn 0.0000 | kl_reg 0.0054
+  Epoch  880/1500 | Loss 1.31003 | Best 1.13210 | recon 1.0662 | kl_dyn 0.0000 | kl_reg 0.0050
+  Epoch  885/1500 | Loss 1.14634 | Best 1.13018 | recon 0.4995 | kl_dyn 0.0000 | kl_reg 0.0052
+  Epoch  890/1500 | Loss 1.29067 | Best 1.13018 | recon 0.9892 | kl_dyn 0.0000 | kl_reg 0.0058
+  Epoch  895/1500 | Loss 1.25483 | Best 1.13018 | recon 0.8197 | kl_dyn 0.0000 | kl_reg 0.0052
+  Epoch  900/1500 | Loss 1.32928 | Best 1.13018 | recon 1.1050 | kl_dyn 0.0000 | kl_reg 0.0044
+  Epoch  905/1500 | Loss 1.34214 | Best 1.13018 | recon 1.1489 | kl_dyn 0.0000 | kl_reg 0.0043
+  Epoch  910/1500 | Loss 1.35778 | Best 1.13018 | recon 1.1535 | kl_dyn 0.0000 | kl_reg 0.0047
+  Epoch  915/1500 | Loss 1.21293 | Best 1.13018 | recon 0.7274 | kl_dyn 0.0000 | kl_reg 0.0039
+  Epoch  920/1500 | Loss 1.17200 | Best 1.13018 | recon 0.5572 | kl_dyn 0.0000 | kl_reg 0.0042
+  Epoch  925/1500 | Loss 1.33210 | Best 1.13018 | recon 1.0991 | kl_dyn 0.0000 | kl_reg 0.0044
+  Epoch  930/1500 | Loss 1.29046 | Best 1.13018 | recon 0.9840 | kl_dyn 0.0000 | kl_reg 0.0048
+  Epoch  935/1500 | Loss 1.25415 | Best 1.13018 | recon 0.8427 | kl_dyn 0.0000 | kl_reg 0.0048
+  Epoch  940/1500 | Loss 1.32636 | Best 1.13018 | recon 1.0813 | kl_dyn 0.0000 | kl_reg 0.0053
+  Epoch  945/1500 | Loss 1.31891 | Best 1.13018 | recon 1.0778 | kl_dyn 0.0000 | kl_reg 0.0054
+  Epoch  950/1500 | Loss 1.30500 | Best 1.13018 | recon 1.0320 | kl_dyn 0.0000 | kl_reg 0.0068
+  Epoch  955/1500 | Loss 1.28539 | Best 1.13018 | recon 0.9667 | kl_dyn 0.0000 | kl_reg 0.0072
+  Epoch  960/1500 | Loss 1.31661 | Best 1.13018 | recon 1.0467 | kl_dyn 0.0000 | kl_reg 0.0066
+  Epoch  965/1500 | Loss 1.38258 | Best 1.13018 | recon 1.2762 | kl_dyn 0.0000 | kl_reg 0.0064
+  Epoch  970/1500 | Loss 1.19887 | Best 1.13018 | recon 0.6700 | kl_dyn 0.0000 | kl_reg 0.0059
+  Epoch  975/1500 | Loss 1.37027 | Best 1.13018 | recon 1.2245 | kl_dyn 0.0000 | kl_reg 0.0051
+  Epoch  980/1500 | Loss 1.32879 | Best 1.13018 | recon 1.0779 | kl_dyn 0.0000 | kl_reg 0.0054
+  Epoch  985/1500 | Loss 1.14684 | Best 1.13018 | recon 0.5114 | kl_dyn 0.0000 | kl_reg 0.0052
+  Epoch  990/1500 | Loss 1.31669 | Best 1.13018 | recon 1.0387 | kl_dyn 0.0000 | kl_reg 0.0051
+  Epoch  995/1500 | Loss 1.37608 | Best 1.13018 | recon 1.2603 | kl_dyn 0.0000 | kl_reg 0.0049
+  Epoch 1000/1500 | Loss 1.31998 | Best 1.13018 | recon 1.0726 | kl_dyn 0.0000 | kl_reg 0.0049
+  Epoch 1005/1500 | Loss 1.27809 | Best 1.13018 | recon 0.9333 | kl_dyn 0.0000 | kl_reg 0.0052
+  Epoch 1010/1500 | Loss 1.29007 | Best 1.13018 | recon 0.9756 | kl_dyn 0.0000 | kl_reg 0.0048
+  Epoch 1015/1500 | Loss 1.16359 | Best 1.13018 | recon 0.5259 | kl_dyn 0.0000 | kl_reg 0.0050
+  Epoch 1020/1500 | Loss 1.31935 | Best 1.13018 | recon 1.0451 | kl_dyn 0.0000 | kl_reg 0.0049
+  Epoch 1025/1500 | Loss 1.25196 | Best 1.13018 | recon 0.8372 | kl_dyn 0.0000 | kl_reg 0.0047
+  Epoch 1030/1500 | Loss 1.42263 | Best 1.13018 | recon 1.4015 | kl_dyn 0.0000 | kl_reg 0.0047
+  Epoch 1035/1500 | Loss 1.29608 | Best 1.13018 | recon 0.9888 | kl_dyn 0.0000 | kl_reg 0.0049
+  Epoch 1040/1500 | Loss 1.26787 | Best 1.13018 | recon 0.8989 | kl_dyn 0.0000 | kl_reg 0.0048
+  Epoch 1045/1500 | Loss 1.27493 | Best 1.13018 | recon 0.9013 | kl_dyn 0.0000 | kl_reg 0.0045
+  Epoch 1050/1500 | Loss 1.26158 | Best 1.13018 | recon 0.8374 | kl_dyn 0.0000 | kl_reg 0.0043
+  Epoch 1055/1500 | Loss 1.34483 | Best 1.13018 | recon 1.1075 | kl_dyn 0.0000 | kl_reg 0.0042
+  Epoch 1060/1500 | Loss 1.30063 | Best 1.13018 | recon 0.9966 | kl_dyn 0.0000 | kl_reg 0.0036
+  Epoch 1065/1500 | Loss 1.24629 | Best 1.13018 | recon 0.8315 | kl_dyn 0.0000 | kl_reg 0.0035
+  Epoch 1070/1500 | Loss 1.15949 | Best 1.13018 | recon 0.5574 | kl_dyn 0.0000 | kl_reg 0.0037
+  Epoch 1075/1500 | Loss 1.22574 | Best 1.13018 | recon 0.7183 | kl_dyn 0.0000 | kl_reg 0.0040
+  Epoch 1080/1500 | Loss 1.24732 | Best 1.13018 | recon 0.8101 | kl_dyn 0.0000 | kl_reg 0.0041
+  Epoch 1085/1500 | Loss 1.27091 | Best 1.13018 | recon 0.9290 | kl_dyn 0.0000 | kl_reg 0.0038
+  Epoch 1090/1500 | Loss 1.29530 | Best 1.13018 | recon 0.9906 | kl_dyn 0.0000 | kl_reg 0.0037
+  Epoch 1095/1500 | Loss 1.23775 | Best 1.13018 | recon 0.8009 | kl_dyn 0.0000 | kl_reg 0.0037
+  Epoch 1100/1500 | Loss 1.31661 | Best 1.13018 | recon 1.0612 | kl_dyn 0.0000 | kl_reg 0.0036
+  Epoch 1105/1500 | Loss 1.30619 | Best 1.13018 | recon 1.0083 | kl_dyn 0.0000 | kl_reg 0.0036
+  Epoch 1110/1500 | Loss 1.31998 | Best 1.13018 | recon 1.0508 | kl_dyn 0.0000 | kl_reg 0.0035
+  Epoch 1115/1500 | Loss 1.35600 | Best 1.13018 | recon 1.2029 | kl_dyn 0.0000 | kl_reg 0.0033
+  Epoch 1120/1500 | Loss 1.23537 | Best 1.13018 | recon 0.7947 | kl_dyn 0.0000 | kl_reg 0.0033
+  Epoch 1125/1500 | Loss 1.32438 | Best 1.13018 | recon 1.0297 | kl_dyn 0.0000 | kl_reg 0.0030
+  Epoch 1130/1500 | Loss 1.41442 | Best 1.13018 | recon 1.3928 | kl_dyn 0.0000 | kl_reg 0.0030
+  Epoch 1135/1500 | Loss 1.30584 | Best 1.13018 | recon 1.0386 | kl_dyn 0.0000 | kl_reg 0.0029
+  Epoch 1140/1500 | Loss 1.34547 | Best 1.13018 | recon 1.1546 | kl_dyn 0.0000 | kl_reg 0.0029
+  Epoch 1145/1500 | Loss 1.30710 | Best 1.13018 | recon 1.0298 | kl_dyn 0.0000 | kl_reg 0.0028
+  Epoch 1150/1500 | Loss 1.30559 | Best 1.13018 | recon 1.0045 | kl_dyn 0.0000 | kl_reg 0.0028
+  Epoch 1155/1500 | Loss 1.25738 | Best 1.13018 | recon 0.8482 | kl_dyn 0.0000 | kl_reg 0.0025
+  Epoch 1160/1500 | Loss 1.21985 | Best 1.13018 | recon 0.7278 | kl_dyn 0.0000 | kl_reg 0.0025
+  Epoch 1165/1500 | Loss 1.38628 | Best 1.13018 | recon 1.2565 | kl_dyn 0.0000 | kl_reg 0.0024
+  Epoch 1170/1500 | Loss 1.39184 | Best 1.13018 | recon 1.2989 | kl_dyn 0.0000 | kl_reg 0.0025
+  Epoch 1175/1500 | Loss 1.34637 | Best 1.13018 | recon 1.1593 | kl_dyn 0.0000 | kl_reg 0.0023
+  Epoch 1180/1500 | Loss 1.38339 | Best 1.13018 | recon 1.2820 | kl_dyn 0.0000 | kl_reg 0.0025
+  Epoch 1185/1500 | Loss 1.29524 | Best 1.13018 | recon 1.0003 | kl_dyn 0.0000 | kl_reg 0.0024
+  Epoch 1190/1500 | Loss 1.27497 | Best 1.13018 | recon 0.9188 | kl_dyn 0.0000 | kl_reg 0.0026
+  Epoch 1195/1500 | Loss 1.20985 | Best 1.13018 | recon 0.6868 | kl_dyn 0.0000 | kl_reg 0.0025
+  Epoch 1200/1500 | Loss 1.38042 | Best 1.13018 | recon 1.2741 | kl_dyn 0.0000 | kl_reg 0.0025
+  Epoch 1205/1500 | Loss 1.27416 | Best 1.13018 | recon 0.8932 | kl_dyn 0.0000 | kl_reg 0.0022
+  Epoch 1210/1500 | Loss 1.33862 | Best 1.13018 | recon 1.1201 | kl_dyn 0.0000 | kl_reg 0.0021
+  Epoch 1215/1500 | Loss 1.26427 | Best 1.13018 | recon 0.8789 | kl_dyn 0.0000 | kl_reg 0.0020
+  Epoch 1220/1500 | Loss 1.24389 | Best 1.13018 | recon 0.8100 | kl_dyn 0.0000 | kl_reg 0.0020
+  Epoch 1225/1500 | Loss 1.28885 | Best 1.13018 | recon 1.0016 | kl_dyn 0.0000 | kl_reg 0.0020
+  Epoch 1230/1500 | Loss 1.28493 | Best 1.13018 | recon 0.9450 | kl_dyn 0.0000 | kl_reg 0.0022
+  Epoch 1235/1500 | Loss 1.30470 | Best 1.13018 | recon 1.0027 | kl_dyn 0.0000 | kl_reg 0.0020
+  Epoch 1240/1500 | Loss 1.26082 | Best 1.13018 | recon 0.8540 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1245/1500 | Loss 1.23180 | Best 1.13018 | recon 0.7964 | kl_dyn 0.0000 | kl_reg 0.0020
+  Epoch 1250/1500 | Loss 1.20378 | Best 1.13018 | recon 0.6846 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1255/1500 | Loss 1.28866 | Best 1.13018 | recon 0.9684 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1260/1500 | Loss 1.21170 | Best 1.13018 | recon 0.7440 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1265/1500 | Loss 1.30747 | Best 1.13018 | recon 1.0133 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1270/1500 | Loss 1.19917 | Best 1.13018 | recon 0.6828 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1275/1500 | Loss 1.26154 | Best 1.13018 | recon 0.8717 | kl_dyn 0.0000 | kl_reg 0.0021
+  Epoch 1280/1500 | Loss 1.23477 | Best 1.13018 | recon 0.7876 | kl_dyn 0.0000 | kl_reg 0.0021
+  Epoch 1285/1500 | Loss 1.32838 | Best 1.13018 | recon 1.1073 | kl_dyn 0.0000 | kl_reg 0.0022
+  Epoch 1290/1500 | Loss 1.26156 | Best 1.13018 | recon 0.8751 | kl_dyn 0.0000 | kl_reg 0.0022
+  Epoch 1295/1500 | Loss 1.27209 | Best 1.13018 | recon 0.9078 | kl_dyn 0.0000 | kl_reg 0.0022
+  Epoch 1300/1500 | Loss 1.27774 | Best 1.13018 | recon 0.9346 | kl_dyn 0.0000 | kl_reg 0.0022
+  Epoch 1305/1500 | Loss 1.25138 | Best 1.13018 | recon 0.8487 | kl_dyn 0.0000 | kl_reg 0.0023
+  Epoch 1310/1500 | Loss 1.25842 | Best 1.13018 | recon 0.8436 | kl_dyn 0.0000 | kl_reg 0.0023
+  Epoch 1315/1500 | Loss 1.36286 | Best 1.13018 | recon 1.1993 | kl_dyn 0.0000 | kl_reg 0.0023
+  Epoch 1320/1500 | Loss 1.26709 | Best 1.13018 | recon 0.8693 | kl_dyn 0.0000 | kl_reg 0.0022
+  Epoch 1325/1500 | Loss 1.15546 | Best 1.13018 | recon 0.5210 | kl_dyn 0.0000 | kl_reg 0.0022
+  Epoch 1330/1500 | Loss 1.32887 | Best 1.13018 | recon 1.0850 | kl_dyn 0.0000 | kl_reg 0.0021
+  Epoch 1335/1500 | Loss 1.31556 | Best 1.13018 | recon 1.0488 | kl_dyn 0.0000 | kl_reg 0.0020
+  Epoch 1340/1500 | Loss 1.36061 | Best 1.13018 | recon 1.1864 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1345/1500 | Loss 1.22830 | Best 1.13018 | recon 0.7603 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1350/1500 | Loss 1.32001 | Best 1.13018 | recon 1.0328 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1355/1500 | Loss 1.25871 | Best 1.13018 | recon 0.8750 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1360/1500 | Loss 1.25001 | Best 1.13018 | recon 0.8348 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1365/1500 | Loss 1.23032 | Best 1.13018 | recon 0.7969 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1370/1500 | Loss 1.30067 | Best 1.13018 | recon 0.9953 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1375/1500 | Loss 1.20798 | Best 1.13018 | recon 0.7096 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1380/1500 | Loss 1.30041 | Best 1.13018 | recon 1.0096 | kl_dyn 0.0000 | kl_reg 0.0020
+  Epoch 1385/1500 | Loss 1.29990 | Best 1.13018 | recon 1.0051 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1390/1500 | Loss 1.31527 | Best 1.13018 | recon 1.0388 | kl_dyn 0.0000 | kl_reg 0.0020
+  Epoch 1395/1500 | Loss 1.33664 | Best 1.13018 | recon 1.1041 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1400/1500 | Loss 1.26023 | Best 1.13018 | recon 0.8855 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1405/1500 | Loss 1.25868 | Best 1.13018 | recon 0.8736 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1410/1500 | Loss 1.38553 | Best 1.13018 | recon 1.2693 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1415/1500 | Loss 1.27181 | Best 1.13018 | recon 0.8938 | kl_dyn 0.0000 | kl_reg 0.0019
+  Epoch 1420/1500 | Loss 1.27557 | Best 1.13018 | recon 0.9200 | kl_dyn 0.0000 | kl_reg 0.0018
+  Epoch 1425/1500 | Loss 1.25211 | Best 1.13018 | recon 0.8892 | kl_dyn 0.0000 | kl_reg 0.0018
+  Epoch 1430/1500 | Loss 1.42731 | Best 1.13018 | recon 1.4354 | kl_dyn 0.0000 | kl_reg 0.0017
+  Epoch 1435/1500 | Loss 1.27607 | Best 1.13018 | recon 0.9227 | kl_dyn 0.0000 | kl_reg 0.0018
+  Epoch 1440/1500 | Loss 1.23611 | Best 1.13018 | recon 0.7754 | kl_dyn 0.0000 | kl_reg 0.0017
+  Epoch 1445/1500 | Loss 1.27855 | Best 1.13018 | recon 0.9403 | kl_dyn 0.0000 | kl_reg 0.0017
+  Epoch 1450/1500 | Loss 1.34969 | Best 1.13018 | recon 1.1696 | kl_dyn 0.0000 | kl_reg 0.0017
+  Epoch 1455/1500 | Loss 1.29102 | Best 1.13018 | recon 0.9511 | kl_dyn 0.0000 | kl_reg 0.0017
+  Epoch 1460/1500 | Loss 1.28842 | Best 1.13018 | recon 0.9623 | kl_dyn 0.0000 | kl_reg 0.0017
+  Epoch 1465/1500 | Loss 1.44981 | Best 1.13018 | recon 1.4812 | kl_dyn 0.0000 | kl_reg 0.0017
+  Epoch 1470/1500 | Loss 1.33623 | Best 1.13018 | recon 1.1262 | kl_dyn 0.0000 | kl_reg 0.0017
+  Epoch 1475/1500 | Loss 1.21852 | Best 1.13018 | recon 0.7210 | kl_dyn 0.0000 | kl_reg 0.0016
+  Epoch 1480/1500 | Loss 1.29722 | Best 1.13018 | recon 1.0023 | kl_dyn 0.0000 | kl_reg 0.0016
+  Epoch 1485/1500 | Loss 1.23000 | Best 1.13018 | recon 0.7617 | kl_dyn 0.0000 | kl_reg 0.0016
+  Epoch 1490/1500 | Loss 1.28929 | Best 1.13018 | recon 0.9608 | kl_dyn 0.0000 | kl_reg 0.0017
+  Epoch 1495/1500 | Loss 1.30669 | Best 1.13018 | recon 1.0248 | kl_dyn 0.0000 | kl_reg 0.0016
+[metrics] saved curves → logs/world_model_v2_20260621_052133/curves.png
+[metrics] saved summary → logs/world_model_v2_20260621_052133/summary.json
+
+[train_v2] World model done. Best loss: 1.13018
+[train_v2] Saved: models_v2/world_model.pt
+
+==================================================
+STARTING DYNA RL TRAINING (v2)
+==================================================
+[metrics] run 'rl_policy_v2_20260621_052710' → logs/rl_policy_v2_20260621_052710/
+
+Dyna-CQL Training: 15000 episodes
+  ε decay/episode=0.99975 (→ 0.05 by ep 12000)
+========================================
+  Ep    0 | Reward:  33.28 | Loss: 0.0000 | ε: 1.000 | Buffer: 40
+  Ep   50 | Reward:  32.55 | Loss: 1.0010 | ε: 0.987 | Buffer: 2040
+  Ep  100 | Reward:  32.25 | Loss: 1.1019 | ε: 0.975 | Buffer: 4040
+  Ep  150 | Reward:  34.95 | Loss: 1.1516 | ε: 0.963 | Buffer: 6040
+  Ep  200 | Reward:  35.18 | Loss: 1.1554 | ε: 0.951 | Buffer: 8040
+  Ep  250 | Reward:  35.50 | Loss: 1.1528 | ε: 0.939 | Buffer: 10040
+  Ep  300 | Reward:  34.19 | Loss: 1.1716 | ε: 0.928 | Buffer: 12040
+  Ep  350 | Reward:  36.07 | Loss: 1.1756 | ε: 0.916 | Buffer: 14040
+  Ep  400 | Reward:  35.83 | Loss: 1.2005 | ε: 0.905 | Buffer: 16040
+  Ep  450 | Reward:  37.95 | Loss: 1.2046 | ε: 0.894 | Buffer: 18040
+  Ep  500 | Reward:  36.17 | Loss: 1.2172 | ε: 0.882 | Buffer: 20040
+  Ep  550 | Reward:  36.06 | Loss: 1.2124 | ε: 0.871 | Buffer: 22040
+  Ep  600 | Reward:  37.31 | Loss: 1.2241 | ε: 0.861 | Buffer: 24040
+  Ep  650 | Reward:  35.84 | Loss: 1.2224 | ε: 0.850 | Buffer: 26040
+  Ep  700 | Reward:  37.51 | Loss: 1.2371 | ε: 0.839 | Buffer: 28040
+  Ep  750 | Reward:  35.20 | Loss: 1.2239 | ε: 0.829 | Buffer: 30040
+  Ep  800 | Reward:  36.58 | Loss: 1.2280 | ε: 0.819 | Buffer: 32040
+  Ep  850 | Reward:  40.20 | Loss: 1.2284 | ε: 0.809 | Buffer: 34040
+  Ep  900 | Reward:  40.46 | Loss: 1.2354 | ε: 0.799 | Buffer: 36040
+  Ep  950 | Reward:  38.61 | Loss: 1.2352 | ε: 0.789 | Buffer: 38040
+  Ep 1000 | Reward:  38.32 | Loss: 1.2160 | ε: 0.779 | Buffer: 40040
+  Ep 1050 | Reward:  38.00 | Loss: 1.2210 | ε: 0.769 | Buffer: 42040
+  Ep 1100 | Reward:  38.28 | Loss: 1.2166 | ε: 0.760 | Buffer: 44040
+  Ep 1150 | Reward:  38.47 | Loss: 1.2435 | ε: 0.750 | Buffer: 46040
+  Ep 1200 | Reward:  40.76 | Loss: 1.2076 | ε: 0.741 | Buffer: 48040
+  Ep 1250 | Reward:  39.26 | Loss: 1.2320 | ε: 0.732 | Buffer: 50040
+  Ep 1300 | Reward:  39.57 | Loss: 1.2103 | ε: 0.723 | Buffer: 52040
+  Ep 1350 | Reward:  39.34 | Loss: 1.2030 | ε: 0.714 | Buffer: 54040
+  Ep 1400 | Reward:  41.26 | Loss: 1.1668 | ε: 0.705 | Buffer: 56040
+  Ep 1450 | Reward:  39.58 | Loss: 1.1999 | ε: 0.696 | Buffer: 58040
+  Ep 1500 | Reward:  38.69 | Loss: 1.2052 | ε: 0.687 | Buffer: 60040
+  Ep 1550 | Reward:  41.00 | Loss: 1.1676 | ε: 0.679 | Buffer: 62040
+  Ep 1600 | Reward:  41.29 | Loss: 1.2057 | ε: 0.671 | Buffer: 64040
+  Ep 1650 | Reward:  39.18 | Loss: 1.1853 | ε: 0.662 | Buffer: 66040
+  Ep 1700 | Reward:  40.52 | Loss: 1.1669 | ε: 0.654 | Buffer: 68040
+  Ep 1750 | Reward:  42.46 | Loss: 1.1719 | ε: 0.646 | Buffer: 70040
+  Ep 1800 | Reward:  43.33 | Loss: 1.1476 | ε: 0.638 | Buffer: 72040
+  Ep 1850 | Reward:  42.77 | Loss: 1.1681 | ε: 0.630 | Buffer: 74040
+  Ep 1900 | Reward:  43.21 | Loss: 1.1357 | ε: 0.622 | Buffer: 76040
+  Ep 1950 | Reward:  41.85 | Loss: 1.1740 | ε: 0.614 | Buffer: 78040
+  Ep 2000 | Reward:  44.27 | Loss: 1.1296 | ε: 0.607 | Buffer: 80040
+  Ep 2050 | Reward:  44.11 | Loss: 1.1474 | ε: 0.599 | Buffer: 82040
+  Ep 2100 | Reward:  43.08 | Loss: 1.1586 | ε: 0.592 | Buffer: 84040
+  Ep 2150 | Reward:  42.34 | Loss: 1.1386 | ε: 0.585 | Buffer: 86040
+  Ep 2200 | Reward:  44.09 | Loss: 1.1746 | ε: 0.577 | Buffer: 88040
+  Ep 2250 | Reward:  45.90 | Loss: 1.1092 | ε: 0.570 | Buffer: 90040
+  Ep 2300 | Reward:  44.74 | Loss: 1.1496 | ε: 0.563 | Buffer: 92040
+  Ep 2350 | Reward:  44.66 | Loss: 1.1150 | ε: 0.556 | Buffer: 94040
+  Ep 2400 | Reward:  44.49 | Loss: 1.1196 | ε: 0.549 | Buffer: 96040
+  Ep 2450 | Reward:  46.72 | Loss: 1.1989 | ε: 0.542 | Buffer: 98040
+  Ep 2500 | Reward:  45.87 | Loss: 1.1546 | ε: 0.536 | Buffer: 100000
+  Ep 2550 | Reward:  44.60 | Loss: 1.1447 | ε: 0.529 | Buffer: 100000
+  Ep 2600 | Reward:  45.80 | Loss: 1.1078 | ε: 0.522 | Buffer: 100000
+  Ep 2650 | Reward:  44.19 | Loss: 1.1060 | ε: 0.516 | Buffer: 100000
+  Ep 2700 | Reward:  46.65 | Loss: 1.1459 | ε: 0.510 | Buffer: 100000
+  Ep 2750 | Reward:  44.12 | Loss: 1.0968 | ε: 0.503 | Buffer: 100000
+  Ep 2800 | Reward:  46.25 | Loss: 1.1461 | ε: 0.497 | Buffer: 100000
+  Ep 2850 | Reward:  46.73 | Loss: 1.1340 | ε: 0.491 | Buffer: 100000
+  Ep 2900 | Reward:  46.41 | Loss: 1.1410 | ε: 0.485 | Buffer: 100000
+  Ep 2950 | Reward:  45.51 | Loss: 1.1377 | ε: 0.479 | Buffer: 100000
+  Ep 3000 | Reward:  48.59 | Loss: 1.1263 | ε: 0.473 | Buffer: 100000
+  Ep 3050 | Reward:  48.21 | Loss: 1.1907 | ε: 0.467 | Buffer: 100000
+  Ep 3100 | Reward:  48.25 | Loss: 1.1050 | ε: 0.461 | Buffer: 100000
+  Ep 3150 | Reward:  46.61 | Loss: 1.1018 | ε: 0.455 | Buffer: 100000
+  Ep 3200 | Reward:  48.28 | Loss: 1.1205 | ε: 0.450 | Buffer: 100000
+  Ep 3250 | Reward:  49.13 | Loss: 1.1090 | ε: 0.444 | Buffer: 100000
+  Ep 3300 | Reward:  48.46 | Loss: 1.1000 | ε: 0.439 | Buffer: 100000
+  Ep 3350 | Reward:  47.90 | Loss: 1.0951 | ε: 0.433 | Buffer: 100000
+  Ep 3400 | Reward:  49.27 | Loss: 1.0748 | ε: 0.428 | Buffer: 100000
+  Ep 3450 | Reward:  49.24 | Loss: 1.0943 | ε: 0.423 | Buffer: 100000
+  Ep 3500 | Reward:  48.63 | Loss: 1.1002 | ε: 0.417 | Buffer: 100000
+  Ep 3550 | Reward:  50.12 | Loss: 1.1050 | ε: 0.412 | Buffer: 100000
+  Ep 3600 | Reward:  49.30 | Loss: 1.0386 | ε: 0.407 | Buffer: 100000
+  Ep 3650 | Reward:  49.52 | Loss: 1.1845 | ε: 0.402 | Buffer: 100000
+  Ep 3700 | Reward:  49.08 | Loss: 1.0696 | ε: 0.397 | Buffer: 100000
+  Ep 3750 | Reward:  49.42 | Loss: 1.0681 | ε: 0.392 | Buffer: 100000
+  Ep 3800 | Reward:  48.20 | Loss: 1.0572 | ε: 0.387 | Buffer: 100000
+  Ep 3850 | Reward:  49.09 | Loss: 1.0549 | ε: 0.382 | Buffer: 100000
+  Ep 3900 | Reward:  50.41 | Loss: 1.0503 | ε: 0.378 | Buffer: 100000
+  Ep 3950 | Reward:  49.91 | Loss: 1.1611 | ε: 0.373 | Buffer: 100000
+  Ep 4000 | Reward:  49.49 | Loss: 1.0174 | ε: 0.368 | Buffer: 100000
+  Ep 4050 | Reward:  50.15 | Loss: 1.0552 | ε: 0.364 | Buffer: 100000
+  Ep 4100 | Reward:  51.08 | Loss: 1.0096 | ε: 0.359 | Buffer: 100000
+  Ep 4150 | Reward:  50.82 | Loss: 1.0655 | ε: 0.355 | Buffer: 100000
+  Ep 4200 | Reward:  51.32 | Loss: 1.0543 | ε: 0.350 | Buffer: 100000
+  Ep 4250 | Reward:  51.22 | Loss: 1.1447 | ε: 0.346 | Buffer: 100000
+  Ep 4300 | Reward:  50.03 | Loss: 1.0323 | ε: 0.342 | Buffer: 100000
+  Ep 4350 | Reward:  51.43 | Loss: 1.0194 | ε: 0.337 | Buffer: 100000
+  Ep 4400 | Reward:  51.23 | Loss: 1.0309 | ε: 0.333 | Buffer: 100000
+  Ep 4450 | Reward:  51.42 | Loss: 0.9854 | ε: 0.329 | Buffer: 100000
+  Ep 4500 | Reward:  51.29 | Loss: 1.0170 | ε: 0.325 | Buffer: 100000
+  Ep 4550 | Reward:  51.43 | Loss: 1.0130 | ε: 0.321 | Buffer: 100000
+  Ep 4600 | Reward:  51.28 | Loss: 1.0547 | ε: 0.317 | Buffer: 100000
+  Ep 4650 | Reward:  52.35 | Loss: 0.9765 | ε: 0.313 | Buffer: 100000
+  Ep 4700 | Reward:  51.08 | Loss: 0.9879 | ε: 0.309 | Buffer: 100000
+  Ep 4750 | Reward:  51.58 | Loss: 1.0099 | ε: 0.305 | Buffer: 100000
+  Ep 4800 | Reward:  52.23 | Loss: 0.9531 | ε: 0.302 | Buffer: 100000
+  Ep 4850 | Reward:  53.42 | Loss: 1.0164 | ε: 0.298 | Buffer: 100000
+  Ep 4900 | Reward:  52.66 | Loss: 1.0146 | ε: 0.294 | Buffer: 100000
+  Ep 4950 | Reward:  52.67 | Loss: 0.9449 | ε: 0.291 | Buffer: 100000
+  Ep 5000 | Reward:  53.68 | Loss: 0.9829 | ε: 0.287 | Buffer: 100000
+  Ep 5050 | Reward:  53.22 | Loss: 1.0016 | ε: 0.283 | Buffer: 100000
+  Ep 5100 | Reward:  53.31 | Loss: 0.9337 | ε: 0.280 | Buffer: 100000
+  Ep 5150 | Reward:  54.14 | Loss: 0.9548 | ε: 0.276 | Buffer: 100000
+  Ep 5200 | Reward:  52.39 | Loss: 0.9664 | ε: 0.273 | Buffer: 100000
+  Ep 5250 | Reward:  53.45 | Loss: 0.9726 | ε: 0.270 | Buffer: 100000
+  Ep 5300 | Reward:  55.89 | Loss: 1.0172 | ε: 0.266 | Buffer: 100000
+  Ep 5350 | Reward:  55.43 | Loss: 0.9150 | ε: 0.263 | Buffer: 100000
+  Ep 5400 | Reward:  55.54 | Loss: 0.9568 | ε: 0.260 | Buffer: 100000
+  Ep 5450 | Reward:  53.29 | Loss: 0.9608 | ε: 0.256 | Buffer: 100000
+  Ep 5500 | Reward:  55.42 | Loss: 0.9366 | ε: 0.253 | Buffer: 100000
+  Ep 5550 | Reward:  54.53 | Loss: 0.9494 | ε: 0.250 | Buffer: 100000
+  Ep 5600 | Reward:  53.82 | Loss: 0.9080 | ε: 0.247 | Buffer: 100000
+  Ep 5650 | Reward:  54.57 | Loss: 0.8850 | ε: 0.244 | Buffer: 100000
+  Ep 5700 | Reward:  54.72 | Loss: 0.8995 | ε: 0.241 | Buffer: 100000
+  Ep 5750 | Reward:  54.50 | Loss: 0.8894 | ε: 0.238 | Buffer: 100000
+  Ep 5800 | Reward:  55.61 | Loss: 0.8905 | ε: 0.235 | Buffer: 100000
+  Ep 5850 | Reward:  54.14 | Loss: 0.8979 | ε: 0.232 | Buffer: 100000
+  Ep 5900 | Reward:  56.46 | Loss: 0.8722 | ε: 0.229 | Buffer: 100000
+  Ep 5950 | Reward:  56.71 | Loss: 0.8661 | ε: 0.226 | Buffer: 100000
+  Ep 6000 | Reward:  55.67 | Loss: 0.8858 | ε: 0.224 | Buffer: 100000
+  Ep 6050 | Reward:  56.95 | Loss: 0.8769 | ε: 0.221 | Buffer: 100000
+  Ep 6100 | Reward:  55.76 | Loss: 0.9104 | ε: 0.218 | Buffer: 100000
+  Ep 6150 | Reward:  55.43 | Loss: 0.8326 | ε: 0.215 | Buffer: 100000
+  Ep 6200 | Reward:  55.43 | Loss: 0.8372 | ε: 0.213 | Buffer: 100000
+  Ep 6250 | Reward:  56.54 | Loss: 0.8645 | ε: 0.210 | Buffer: 100000
+  Ep 6300 | Reward:  56.18 | Loss: 0.8489 | ε: 0.207 | Buffer: 100000
+  Ep 6350 | Reward:  54.77 | Loss: 0.8591 | ε: 0.205 | Buffer: 100000
+  Ep 6400 | Reward:  57.11 | Loss: 0.8609 | ε: 0.202 | Buffer: 100000
+  Ep 6450 | Reward:  56.15 | Loss: 0.8415 | ε: 0.200 | Buffer: 100000
+  Ep 6500 | Reward:  55.82 | Loss: 0.8321 | ε: 0.197 | Buffer: 100000
+  Ep 6550 | Reward:  57.57 | Loss: 0.9033 | ε: 0.195 | Buffer: 100000
+  Ep 6600 | Reward:  57.22 | Loss: 0.8422 | ε: 0.192 | Buffer: 100000
+  Ep 6650 | Reward:  56.76 | Loss: 0.8146 | ε: 0.190 | Buffer: 100000
+  Ep 6700 | Reward:  56.50 | Loss: 0.8311 | ε: 0.188 | Buffer: 100000
+  Ep 6750 | Reward:  56.95 | Loss: 0.8198 | ε: 0.185 | Buffer: 100000
+  Ep 6800 | Reward:  56.25 | Loss: 0.8124 | ε: 0.183 | Buffer: 100000
+  Ep 6850 | Reward:  57.36 | Loss: 0.7881 | ε: 0.181 | Buffer: 100000
+  Ep 6900 | Reward:  56.13 | Loss: 0.8583 | ε: 0.179 | Buffer: 100000
+  Ep 6950 | Reward:  56.18 | Loss: 0.7886 | ε: 0.176 | Buffer: 100000
+  Ep 7000 | Reward:  57.72 | Loss: 0.7714 | ε: 0.174 | Buffer: 100000
+  Ep 7050 | Reward:  57.45 | Loss: 0.7859 | ε: 0.172 | Buffer: 100000
+  Ep 7100 | Reward:  57.69 | Loss: 0.7692 | ε: 0.170 | Buffer: 100000
+  Ep 7150 | Reward:  58.59 | Loss: 0.7578 | ε: 0.168 | Buffer: 100000
+  Ep 7200 | Reward:  55.84 | Loss: 0.7602 | ε: 0.166 | Buffer: 100000
+  Ep 7250 | Reward:  57.12 | Loss: 0.7505 | ε: 0.164 | Buffer: 100000
+  Ep 7300 | Reward:  56.48 | Loss: 0.7819 | ε: 0.162 | Buffer: 100000
+  Ep 7350 | Reward:  57.87 | Loss: 0.7474 | ε: 0.160 | Buffer: 100000
+  Ep 7400 | Reward:  57.28 | Loss: 0.7582 | ε: 0.158 | Buffer: 100000
+  Ep 7450 | Reward:  58.65 | Loss: 0.7698 | ε: 0.156 | Buffer: 100000
+  Ep 7500 | Reward:  57.32 | Loss: 0.7472 | ε: 0.154 | Buffer: 100000
+  Ep 7550 | Reward:  57.41 | Loss: 0.7368 | ε: 0.152 | Buffer: 100000
+  Ep 7600 | Reward:  58.88 | Loss: 0.7163 | ε: 0.150 | Buffer: 100000
+  Ep 7650 | Reward:  58.20 | Loss: 0.7301 | ε: 0.148 | Buffer: 100000
+  Ep 7700 | Reward:  57.50 | Loss: 0.7083 | ε: 0.146 | Buffer: 100000
+  Ep 7750 | Reward:  57.51 | Loss: 0.7013 | ε: 0.144 | Buffer: 100000
+  Ep 7800 | Reward:  58.03 | Loss: 0.7247 | ε: 0.143 | Buffer: 100000
+  Ep 7850 | Reward:  57.85 | Loss: 0.7076 | ε: 0.141 | Buffer: 100000
+  Ep 7900 | Reward:  58.36 | Loss: 0.7208 | ε: 0.139 | Buffer: 100000
+  Ep 7950 | Reward:  58.42 | Loss: 0.6815 | ε: 0.137 | Buffer: 100000
+  Ep 8000 | Reward:  58.03 | Loss: 0.6976 | ε: 0.136 | Buffer: 100000
+  Ep 8050 | Reward:  58.73 | Loss: 0.6982 | ε: 0.134 | Buffer: 100000
+  Ep 8100 | Reward:  58.35 | Loss: 0.6682 | ε: 0.132 | Buffer: 100000
+  Ep 8150 | Reward:  59.36 | Loss: 0.6748 | ε: 0.131 | Buffer: 100000
+  Ep 8200 | Reward:  59.64 | Loss: 0.6783 | ε: 0.129 | Buffer: 100000
+  Ep 8250 | Reward:  58.53 | Loss: 0.6945 | ε: 0.127 | Buffer: 100000
+  Ep 8300 | Reward:  59.21 | Loss: 0.6635 | ε: 0.126 | Buffer: 100000
+  Ep 8350 | Reward:  59.13 | Loss: 0.6249 | ε: 0.124 | Buffer: 100000
+  Ep 8400 | Reward:  58.22 | Loss: 0.6830 | ε: 0.123 | Buffer: 100000
+  Ep 8450 | Reward:  59.09 | Loss: 0.6506 | ε: 0.121 | Buffer: 100000
+  Ep 8500 | Reward:  59.67 | Loss: 0.6362 | ε: 0.120 | Buffer: 100000
+  Ep 8550 | Reward:  58.77 | Loss: 0.6406 | ε: 0.118 | Buffer: 100000
+  Ep 8600 | Reward:  57.91 | Loss: 0.6400 | ε: 0.117 | Buffer: 100000
+  Ep 8650 | Reward:  59.47 | Loss: 0.6324 | ε: 0.115 | Buffer: 100000
+  Ep 8700 | Reward:  58.82 | Loss: 0.6239 | ε: 0.114 | Buffer: 100000
+  Ep 8750 | Reward:  59.41 | Loss: 0.6238 | ε: 0.113 | Buffer: 100000
+  Ep 8800 | Reward:  59.22 | Loss: 0.6119 | ε: 0.111 | Buffer: 100000
+  Ep 8850 | Reward:  59.15 | Loss: 0.5997 | ε: 0.110 | Buffer: 100000
+  Ep 8900 | Reward:  59.38 | Loss: 0.5822 | ε: 0.108 | Buffer: 100000
+  Ep 8950 | Reward:  59.49 | Loss: 0.5865 | ε: 0.107 | Buffer: 100000
+  Ep 9000 | Reward:  60.44 | Loss: 0.5756 | ε: 0.106 | Buffer: 100000
+  Ep 9050 | Reward:  58.78 | Loss: 0.5832 | ε: 0.104 | Buffer: 100000
+  Ep 9100 | Reward:  58.98 | Loss: 0.5893 | ε: 0.103 | Buffer: 100000
+  Ep 9150 | Reward:  59.80 | Loss: 0.5940 | ε: 0.102 | Buffer: 100000
+  Ep 9200 | Reward:  59.10 | Loss: 0.5722 | ε: 0.101 | Buffer: 100000
+  Ep 9250 | Reward:  60.20 | Loss: 0.5930 | ε: 0.099 | Buffer: 100000
+  Ep 9300 | Reward:  58.83 | Loss: 0.5203 | ε: 0.098 | Buffer: 100000
+  Ep 9350 | Reward:  58.35 | Loss: 0.5235 | ε: 0.097 | Buffer: 100000
+  Ep 9400 | Reward:  60.22 | Loss: 0.5526 | ε: 0.096 | Buffer: 100000
+  Ep 9450 | Reward:  59.39 | Loss: 0.5458 | ε: 0.094 | Buffer: 100000
+  Ep 9500 | Reward:  60.28 | Loss: 0.5487 | ε: 0.093 | Buffer: 100000
+  Ep 9550 | Reward:  59.21 | Loss: 0.5385 | ε: 0.092 | Buffer: 100000
+  Ep 9600 | Reward:  59.01 | Loss: 0.5095 | ε: 0.091 | Buffer: 100000
+  Ep 9650 | Reward:  58.64 | Loss: 0.5727 | ε: 0.090 | Buffer: 100000
+  Ep 9700 | Reward:  58.97 | Loss: 0.5435 | ε: 0.089 | Buffer: 100000
+  Ep 9750 | Reward:  58.78 | Loss: 0.5250 | ε: 0.088 | Buffer: 100000
+  Ep 9800 | Reward:  59.20 | Loss: 0.5274 | ε: 0.087 | Buffer: 100000
+  Ep 9850 | Reward:  60.63 | Loss: 0.5052 | ε: 0.085 | Buffer: 100000
+  Ep 9900 | Reward:  59.97 | Loss: 0.4986 | ε: 0.084 | Buffer: 100000
+  Ep 9950 | Reward:  60.06 | Loss: 0.4935 | ε: 0.083 | Buffer: 100000
+  Ep 10000 | Reward:  61.21 | Loss: 0.5100 | ε: 0.082 | Buffer: 100000
+  Ep 10050 | Reward:  60.65 | Loss: 0.4841 | ε: 0.081 | Buffer: 100000
+  Ep 10100 | Reward:  60.49 | Loss: 0.4890 | ε: 0.080 | Buffer: 100000
+  Ep 10150 | Reward:  60.12 | Loss: 0.4603 | ε: 0.079 | Buffer: 100000
+  Ep 10200 | Reward:  60.81 | Loss: 0.5028 | ε: 0.078 | Buffer: 100000
+  Ep 10250 | Reward:  61.02 | Loss: 0.4854 | ε: 0.077 | Buffer: 100000
+  Ep 10300 | Reward:  60.57 | Loss: 0.4516 | ε: 0.076 | Buffer: 100000
+  Ep 10350 | Reward:  60.63 | Loss: 0.4859 | ε: 0.075 | Buffer: 100000
+  Ep 10400 | Reward:  61.85 | Loss: 0.5157 | ε: 0.075 | Buffer: 100000
+  Ep 10450 | Reward:  60.85 | Loss: 0.5061 | ε: 0.074 | Buffer: 100000
+  Ep 10500 | Reward:  60.48 | Loss: 0.4430 | ε: 0.073 | Buffer: 100000
+  Ep 10550 | Reward:  61.23 | Loss: 0.4503 | ε: 0.072 | Buffer: 100000
+  Ep 10600 | Reward:  60.93 | Loss: 0.4549 | ε: 0.071 | Buffer: 100000
+  Ep 10650 | Reward:  60.36 | Loss: 0.4532 | ε: 0.070 | Buffer: 100000
+  Ep 10700 | Reward:  61.48 | Loss: 0.4468 | ε: 0.069 | Buffer: 100000
+  Ep 10750 | Reward:  61.03 | Loss: 0.4145 | ε: 0.068 | Buffer: 100000
+  Ep 10800 | Reward:  61.14 | Loss: 0.4412 | ε: 0.067 | Buffer: 100000
+  Ep 10850 | Reward:  60.92 | Loss: 0.4255 | ε: 0.067 | Buffer: 100000
+  Ep 10900 | Reward:  60.42 | Loss: 0.4143 | ε: 0.066 | Buffer: 100000
+  Ep 10950 | Reward:  61.31 | Loss: 0.4357 | ε: 0.065 | Buffer: 100000
+  Ep 11000 | Reward:  61.41 | Loss: 0.4086 | ε: 0.064 | Buffer: 100000
+  Ep 11050 | Reward:  60.91 | Loss: 0.4216 | ε: 0.063 | Buffer: 100000
+  Ep 11100 | Reward:  61.44 | Loss: 0.4077 | ε: 0.063 | Buffer: 100000
+  Ep 11150 | Reward:  60.80 | Loss: 0.3879 | ε: 0.062 | Buffer: 100000
+  Ep 11200 | Reward:  60.91 | Loss: 0.4463 | ε: 0.061 | Buffer: 100000
+  Ep 11250 | Reward:  61.06 | Loss: 0.4340 | ε: 0.060 | Buffer: 100000
+  Ep 11300 | Reward:  60.96 | Loss: 0.3916 | ε: 0.060 | Buffer: 100000
+  Ep 11350 | Reward:  60.83 | Loss: 0.4040 | ε: 0.059 | Buffer: 100000
+  Ep 11400 | Reward:  61.85 | Loss: 0.3910 | ε: 0.058 | Buffer: 100000
+  Ep 11450 | Reward:  61.19 | Loss: 0.3778 | ε: 0.057 | Buffer: 100000
+  Ep 11500 | Reward:  60.76 | Loss: 0.3982 | ε: 0.057 | Buffer: 100000
+  Ep 11550 | Reward:  61.38 | Loss: 0.4014 | ε: 0.056 | Buffer: 100000
+  Ep 11600 | Reward:  61.63 | Loss: 0.3945 | ε: 0.055 | Buffer: 100000
+  Ep 11650 | Reward:  60.86 | Loss: 0.3593 | ε: 0.055 | Buffer: 100000
+  Ep 11700 | Reward:  61.23 | Loss: 0.3736 | ε: 0.054 | Buffer: 100000
+  Ep 11750 | Reward:  60.65 | Loss: 0.3466 | ε: 0.053 | Buffer: 100000
+  Ep 11800 | Reward:  60.97 | Loss: 0.3582 | ε: 0.053 | Buffer: 100000
+  Ep 11850 | Reward:  61.24 | Loss: 0.3858 | ε: 0.052 | Buffer: 100000
+  Ep 11900 | Reward:  60.45 | Loss: 0.3655 | ε: 0.051 | Buffer: 100000
+  Ep 11950 | Reward:  61.89 | Loss: 0.3515 | ε: 0.051 | Buffer: 100000
+  Ep 12000 | Reward:  61.35 | Loss: 0.3420 | ε: 0.050 | Buffer: 100000
+  Ep 12050 | Reward:  61.22 | Loss: 0.3469 | ε: 0.050 | Buffer: 100000
+  Ep 12100 | Reward:  62.14 | Loss: 0.3466 | ε: 0.050 | Buffer: 100000
+  Ep 12150 | Reward:  61.26 | Loss: 0.3344 | ε: 0.050 | Buffer: 100000
+  Ep 12200 | Reward:  61.23 | Loss: 0.3344 | ε: 0.050 | Buffer: 100000
+  Ep 12250 | Reward:  61.25 | Loss: 0.3405 | ε: 0.050 | Buffer: 100000
+  Ep 12300 | Reward:  60.88 | Loss: 0.3252 | ε: 0.050 | Buffer: 100000
+  Ep 12350 | Reward:  61.37 | Loss: 0.3236 | ε: 0.050 | Buffer: 100000
+  Ep 12400 | Reward:  61.57 | Loss: 0.3207 | ε: 0.050 | Buffer: 100000
+  Ep 12450 | Reward:  60.97 | Loss: 0.3167 | ε: 0.050 | Buffer: 100000
+  Ep 12500 | Reward:  60.62 | Loss: 0.3117 | ε: 0.050 | Buffer: 100000
+  Ep 12550 | Reward:  61.56 | Loss: 0.3350 | ε: 0.050 | Buffer: 100000
+  Ep 12600 | Reward:  61.56 | Loss: 0.3129 | ε: 0.050 | Buffer: 100000
+  Ep 12650 | Reward:  61.57 | Loss: 0.3188 | ε: 0.050 | Buffer: 100000
+  Ep 12700 | Reward:  60.89 | Loss: 0.3592 | ε: 0.050 | Buffer: 100000
+  Ep 12750 | Reward:  61.11 | Loss: 0.3191 | ε: 0.050 | Buffer: 100000
+  Ep 12800 | Reward:  61.13 | Loss: 0.3062 | ε: 0.050 | Buffer: 100000
+  Ep 12850 | Reward:  61.64 | Loss: 0.2844 | ε: 0.050 | Buffer: 100000
+  Ep 12900 | Reward:  61.25 | Loss: 0.3097 | ε: 0.050 | Buffer: 100000
+  Ep 12950 | Reward:  62.12 | Loss: 0.3101 | ε: 0.050 | Buffer: 100000
+  Ep 13000 | Reward:  61.52 | Loss: 0.3160 | ε: 0.050 | Buffer: 100000
+  Ep 13050 | Reward:  62.07 | Loss: 0.2784 | ε: 0.050 | Buffer: 100000
+  Ep 13100 | Reward:  61.91 | Loss: 0.3168 | ε: 0.050 | Buffer: 100000
+  Ep 13150 | Reward:  61.82 | Loss: 0.2906 | ε: 0.050 | Buffer: 100000
+  Ep 13200 | Reward:  61.88 | Loss: 0.2968 | ε: 0.050 | Buffer: 100000
+  Ep 13250 | Reward:  60.78 | Loss: 0.2799 | ε: 0.050 | Buffer: 100000
+  Ep 13300 | Reward:  60.95 | Loss: 0.2744 | ε: 0.050 | Buffer: 100000
+  Ep 13350 | Reward:  61.33 | Loss: 0.2886 | ε: 0.050 | Buffer: 100000
+  Ep 13400 | Reward:  61.13 | Loss: 0.2921 | ε: 0.050 | Buffer: 100000
+  Ep 13450 | Reward:  61.18 | Loss: 0.2893 | ε: 0.050 | Buffer: 100000
+  Ep 13500 | Reward:  61.46 | Loss: 0.2976 | ε: 0.050 | Buffer: 100000
+  Ep 13550 | Reward:  62.05 | Loss: 0.2807 | ε: 0.050 | Buffer: 100000
+  Ep 13600 | Reward:  61.50 | Loss: 0.2757 | ε: 0.050 | Buffer: 100000
+  Ep 13650 | Reward:  60.95 | Loss: 0.2644 | ε: 0.050 | Buffer: 100000
+  Ep 13700 | Reward:  61.56 | Loss: 0.2699 | ε: 0.050 | Buffer: 100000
+  Ep 13750 | Reward:  60.89 | Loss: 0.2787 | ε: 0.050 | Buffer: 100000
+  Ep 13800 | Reward:  62.79 | Loss: 0.2850 | ε: 0.050 | Buffer: 100000
+  Ep 13850 | Reward:  60.89 | Loss: 0.2573 | ε: 0.050 | Buffer: 100000
+  Ep 13900 | Reward:  61.29 | Loss: 0.2669 | ε: 0.050 | Buffer: 100000
+  Ep 13950 | Reward:  61.30 | Loss: 0.2632 | ε: 0.050 | Buffer: 100000
+  Ep 14000 | Reward:  61.54 | Loss: 0.2484 | ε: 0.050 | Buffer: 100000
+  Ep 14050 | Reward:  61.54 | Loss: 0.2687 | ε: 0.050 | Buffer: 100000
+  Ep 14100 | Reward:  61.21 | Loss: 0.2932 | ε: 0.050 | Buffer: 100000
+  Ep 14150 | Reward:  60.87 | Loss: 0.3158 | ε: 0.050 | Buffer: 100000
+  Ep 14200 | Reward:  61.46 | Loss: 0.2550 | ε: 0.050 | Buffer: 100000
+  Ep 14250 | Reward:  61.73 | Loss: 0.2754 | ε: 0.050 | Buffer: 100000
+  Ep 14300 | Reward:  61.25 | Loss: 0.2846 | ε: 0.050 | Buffer: 100000
+  Ep 14350 | Reward:  61.40 | Loss: 0.2668 | ε: 0.050 | Buffer: 100000
+  Ep 14400 | Reward:  61.62 | Loss: 0.2651 | ε: 0.050 | Buffer: 100000
+  Ep 14450 | Reward:  60.92 | Loss: 0.2592 | ε: 0.050 | Buffer: 100000
+  Ep 14500 | Reward:  61.06 | Loss: 0.2517 | ε: 0.050 | Buffer: 100000
+  Ep 14550 | Reward:  60.98 | Loss: 0.2555 | ε: 0.050 | Buffer: 100000
+  Ep 14600 | Reward:  61.71 | Loss: 0.2738 | ε: 0.050 | Buffer: 100000
+  Ep 14650 | Reward:  61.51 | Loss: 0.2444 | ε: 0.050 | Buffer: 100000
+  Ep 14700 | Reward:  61.38 | Loss: 0.2771 | ε: 0.050 | Buffer: 100000
+  Ep 14750 | Reward:  61.73 | Loss: 0.2633 | ε: 0.050 | Buffer: 100000
+  Ep 14800 | Reward:  61.45 | Loss: 0.2515 | ε: 0.050 | Buffer: 100000
+  Ep 14850 | Reward:  61.96 | Loss: 0.2530 | ε: 0.050 | Buffer: 100000
+  Ep 14900 | Reward:  62.28 | Loss: 0.2887 | ε: 0.050 | Buffer: 100000
+  Ep 14950 | Reward:  61.27 | Loss: 0.2838 | ε: 0.050 | Buffer: 100000
+
+✓ Dyna training complete
+[metrics] saved curves → logs/rl_policy_v2_20260621_052710/curves.png
+[metrics] saved summary → logs/rl_policy_v2_20260621_052710/summary.json
+[train_v2] RL policy saved: models_v2/rl_policy.pt

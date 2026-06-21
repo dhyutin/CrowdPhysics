@@ -1,0 +1,31 @@
+{
+  "run_id": "rl_policy_v2_20260621_052710",
+  "job": "rl_policy_v2",
+  "config": {
+    "episodes": 15000,
+    "steps_per_episode": 10,
+    "transition_type": "lstm"
+  },
+  "n_steps": 15000,
+  "duration_s": 2213.6,
+  "final": {
+    "step": 14999,
+    "elapsed_s": 2213.6,
+    "reward": 58.782581359148026,
+    "avg_reward_50": 62.05202005732059,
+    "loss": 0.3038593,
+    "epsilon": 0.05,
+    "buffer": 100000.0
+  },
+  "best": {
+    "reward": 68.212765,
+    "avg_reward_50": 62.791021,
+    "loss": 0.0,
+    "epsilon": 0.99975,
+    "buffer": 100000.0
+  },
+  "files": {
+    "csv": "logs/rl_policy_v2_20260621_052710/metrics.csv",
+    "png": "logs/rl_policy_v2_20260621_052710/curves.png"
+  }
+}

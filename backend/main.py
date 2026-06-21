@@ -34,6 +34,33 @@ from pydantic import BaseModel
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+
+def _load_env_file(path: Path) -> None:
+    """
+    Minimal .env loader so the API picks up keys (ANTHROPIC, BROWSERBASE, ARIZE)
+    without needing the shell to `source .env` first. Supports lines like
+    `export KEY="value"` and `KEY=value`; does not overwrite existing env vars.
+    """
+    try:
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):]
+            if "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = val
+    except FileNotFoundError:
+        pass
+
+
+_load_env_file(ROOT / ".env")
+
 # Initialize Arize tracing BEFORE importing claude_interpreter (which builds the
 # Anthropic client). Auto-instruments every Claude call.
 from instrumentation import setup_tracing

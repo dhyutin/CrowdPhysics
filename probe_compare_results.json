@@ -1,0 +1,99 @@
+{
+  "baseline": {
+    "concepts": {
+      "crowd_velocity": {
+        "r2": 0.832,
+        "top_dimensions": [
+          34,
+          49,
+          42,
+          52,
+          32
+        ]
+      },
+      "turbulence": {
+        "r2": 0.782,
+        "top_dimensions": [
+          34,
+          49,
+          17,
+          31,
+          9
+        ]
+      },
+      "backward_pressure": {
+        "r2": 0.839,
+        "top_dimensions": [
+          34,
+          49,
+          9,
+          52,
+          32
+        ]
+      },
+      "boundary_stress": {
+        "r2": 0.94,
+        "top_dimensions": [
+          52,
+          34,
+          54,
+          49,
+          16
+        ]
+      }
+    },
+    "mean_r2": 0.848,
+    "surprise_sep_sigma": 1.557
+  },
+  "vla": {
+    "concepts": {
+      "crowd_velocity": {
+        "r2": 0.9,
+        "top_dimensions": [
+          63,
+          37,
+          7,
+          33,
+          42
+        ]
+      },
+      "turbulence": {
+        "r2": 0.802,
+        "top_dimensions": [
+          29,
+          63,
+          33,
+          42,
+          53
+        ]
+      },
+      "backward_pressure": {
+        "r2": 0.889,
+        "top_dimensions": [
+          53,
+          33,
+          29,
+          37,
+          42
+        ]
+      },
+      "boundary_stress": {
+        "r2": 0.884,
+        "top_dimensions": [
+          29,
+          42,
+          53,
+          52,
+          63
+        ]
+      }
+    },
+    "mean_r2": 0.869,
+    "surprise_sep_sigma": 1.247
+  },
+  "recommendation": "BASELINE (v1)",
+  "scores": {
+    "baseline": 1.627,
+    "vla": 1.493
+  }
+}
